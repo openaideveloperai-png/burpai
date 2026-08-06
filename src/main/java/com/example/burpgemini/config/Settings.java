@@ -27,7 +27,7 @@ public final class Settings {
     /** AI provider ids. */
     public static final String PROVIDER_GEMINI = "gemini";
     public static final String PROVIDER_PUTER = "puter";
-    public static final String DEFAULT_PUTER_MODEL = "openai/gpt-5.3-chat";
+    public static final String DEFAULT_PUTER_MODEL = "openai/gpt-4o-mini";
 
     /** Models offered in the Config dropdown. First entry is the default. */
     public static final String[] MODELS = {

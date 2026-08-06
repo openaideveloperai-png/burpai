@@ -90,14 +90,20 @@ exact error).
 
 ### Option B — Puter AI (OpenAI‑compatible)
 1. Sign in at **https://puter.com/dashboard**, open the **API tokens** section, click **Create token**.
-2. Paste it into **Puter auth token**, choose a **Puter model** (e.g. `openai/gpt-5.3-chat`,
-   `claude-sonnet-4-latest`, `google/gemini-2.5-flash`, `x-ai/grok-4` — the field is editable), **Save**.
+2. Paste it into **Puter auth token**, choose a **Puter model** (default `openai/gpt-4o-mini`; the
+   field is editable), **Save**.
 3. Or set the `PUTER_AUTH_TOKEN` environment variable and leave the field blank.
 
 Puter exposes an **OpenAI‑compatible** Chat Completions endpoint
 (`https://api.puter.com/puterai/openai/v1/chat/completions`), so tool/function calling works through
 the standard OpenAI convention. Switching providers starts a fresh chat session (the two wire formats
 aren't interchangeable mid‑conversation).
+
+> **Puter model choice matters for tool calling.** This extension is tool‑heavy (multi‑turn function
+> calls). Prefer a **Chat‑Completions‑native** model — `openai/gpt-4o-mini`, `openai/gpt-4o`, or
+> `claude-sonnet-4-latest`. Some GPT‑5.x models route through Puter's OpenAI‑*Responses* bridge,
+> which can break the tool‑call/tool‑result linkage (`No tool call found for … call_id …`); if you
+> hit that, switch to a gpt‑4o model. Gemini (Option A) is unaffected.
 
 > **Secrets note:** saved keys/tokens live in Burp's preferences, which are **not strongly encrypted
 > at rest**. They are never logged and never written into chat transcripts. Prefer the environment
@@ -111,7 +117,7 @@ aren't interchangeable mid‑conversation).
 | Gemini model | `gemini-3.1-pro-preview-customtools` | Model used when the provider is Gemini. |
 | Thinking level | High | Reasoning depth (`thinkingConfig.thinkingBudget`: High = dynamic, Low = minimal). |
 | Puter auth token | — | Bearer token for Puter's OpenAI‑compatible endpoint. |
-| Puter model | `openai/gpt-5.3-chat` | Model used when the provider is Puter (editable). |
+| Puter model | `openai/gpt-4o-mini` | Model used when the provider is Puter (editable). Prefer a Chat‑Completions‑native model for reliable tool calling. |
 | Require confirmation before active actions | **ON** | Governs Tier 1–2. Tier 3 always confirms regardless. |
 | Respect Burp scope | **ON** | Blocks out‑of‑scope target traffic. |
 | Allow out‑of‑scope with explicit confirmation | **OFF** | If ON, out‑of‑scope actions can proceed only after ticking a red per‑action checkbox. |

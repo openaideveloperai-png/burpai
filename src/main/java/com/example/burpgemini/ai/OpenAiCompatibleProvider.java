@@ -36,14 +36,19 @@ public final class OpenAiCompatibleProvider implements AiProvider {
 
     private static final String ENDPOINT = "https://api.puter.com/puterai/openai/v1/chat/completions";
 
-    /** Models offered in the Config dropdown (editable). */
+    /**
+     * Models offered in the Config dropdown (editable). Chat-Completions-native models
+     * (gpt-4o family, Claude) are listed first because they handle multi-turn tool calls reliably
+     * in the stateless messages format; GPT-5.x may route through Puter's OpenAI-<em>Responses</em>
+     * bridge, which is stricter about tool-call linkage.
+     */
     public static final String[] MODELS = {
-            "openai/gpt-5.3-chat",
-            "openai/gpt-5.4-nano",
-            "openai/gpt-4o",
             "openai/gpt-4o-mini",
+            "openai/gpt-4o",
             "claude-sonnet-4-latest",
             "google/gemini-2.5-flash",
+            "openai/gpt-5.3-chat",
+            "openai/gpt-5.4-nano",
             "x-ai/grok-4",
     };
     public static final String DEFAULT_MODEL = MODELS[0];
@@ -127,6 +132,15 @@ public final class OpenAiCompatibleProvider implements AiProvider {
                     + "Create a fresh token at puter.com/dashboard → API tokens. "
                     + (apiMsg == null ? "" : "Details: " + apiMsg), r.status);
         }
+        if (r.status == 400 && apiMsg != null && apiMsg.toLowerCase().contains("tool call")) {
+            // Puter routed this model through its OpenAI-Responses bridge, which mishandles the
+            // multi-turn tool-call linkage. A Chat-Completions-native model avoids it.
+            return TurnResult.error("Puter couldn't link the tool call (HTTP 400) — the selected "
+                    + "model routes through Puter's OpenAI-Responses bridge, which breaks multi-turn "
+                    + "tool calling. Switch the Puter model to a Chat-Completions-native one "
+                    + "(e.g. openai/gpt-4o-mini or openai/gpt-4o) in the Config tab. "
+                    + "Details: " + apiMsg, r.status);
+        }
         if (r.status == 429) {
             return TurnResult.error("Rate limited by Puter (HTTP 429). Please retry in a moment. "
                     + (apiMsg == null ? "" : apiMsg), r.status);
@@ -193,8 +207,16 @@ public final class OpenAiCompatibleProvider implements AiProvider {
                 case MODEL: {
                     Message asst = new Message();
                     asst.role = "assistant";
-                    asst.content = m.text == null ? "" : m.text;
-                    if (m.toolCalls != null && !m.toolCalls.isEmpty()) {
+                    boolean hasCalls = m.toolCalls != null && !m.toolCalls.isEmpty();
+                    // Canonical OpenAI: a pure tool-call turn omits `content` (null). Sending "" can
+                    // make Puter's Responses-API bridge emit a stray text item and break the
+                    // tool_call -> tool_result call_id linkage ("No tool call found for ...").
+                    if (m.text != null && !m.text.isEmpty()) {
+                        asst.content = m.text;
+                    } else if (!hasCalls) {
+                        asst.content = "";
+                    }
+                    if (hasCalls) {
                         asst.tool_calls = new ArrayList<>();
                         for (ToolCallRequest tc : m.toolCalls) {
                             ToolCall out = new ToolCall();
