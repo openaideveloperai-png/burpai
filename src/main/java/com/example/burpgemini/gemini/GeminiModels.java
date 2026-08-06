@@ -82,6 +82,9 @@ public final class GeminiModels {
         public String text;
         public FunctionCall functionCall;
         public FunctionResponse functionResponse;
+        // Gemini 3 thinking models attach a thoughtSignature to functionCall (and some text) parts.
+        // It MUST be echoed back verbatim when the part is resent, or tool calls fail with HTTP 400.
+        public String thoughtSignature;
 
         public static Part text(String t) {
             Part p = new Part();

@@ -20,6 +20,14 @@ public final class Settings {
     private static final String K_RESPECT_SCOPE = "burpgemini.respectScope";
     private static final String K_ALLOW_OOS = "burpgemini.allowOutOfScope";
     private static final String K_PERSIST_TRANSCRIPTS = "burpgemini.persistTranscripts";
+    private static final String K_PROVIDER = "burpgemini.provider";
+    private static final String K_PUTER_TOKEN = "burpgemini.puterToken";
+    private static final String K_PUTER_MODEL = "burpgemini.puterModel";
+
+    /** AI provider ids. */
+    public static final String PROVIDER_GEMINI = "gemini";
+    public static final String PROVIDER_PUTER = "puter";
+    public static final String DEFAULT_PUTER_MODEL = "openai/gpt-5.3-chat";
 
     /** Models offered in the Config dropdown. First entry is the default. */
     public static final String[] MODELS = {
@@ -72,6 +80,63 @@ public final class Settings {
         } else {
             prefs.setString(K_API_KEY, key.trim());
         }
+    }
+
+    // ---- provider selection -----------------------------------------------
+
+    public String getProvider() {
+        String p = prefs.getString(K_PROVIDER);
+        return (p == null || p.isBlank()) ? PROVIDER_GEMINI : p;
+    }
+
+    public void setProvider(String provider) {
+        prefs.setString(K_PROVIDER, provider);
+    }
+
+    // ---- Puter (OpenAI-compatible) ----------------------------------------
+
+    /** Effective Puter token: stored value, or the PUTER_AUTH_TOKEN / PUTER_API_KEY env fallback. */
+    public String getPuterToken() {
+        String stored = prefs.getString(K_PUTER_TOKEN);
+        if (stored != null && !stored.isBlank()) {
+            return stored.trim();
+        }
+        String env = System.getenv("PUTER_AUTH_TOKEN");
+        if (env == null || env.isBlank()) {
+            env = System.getenv("PUTER_API_KEY");
+        }
+        return env == null ? "" : env.trim();
+    }
+
+    public boolean hasPuterToken() {
+        return !getPuterToken().isBlank();
+    }
+
+    public boolean puterTokenFromEnv() {
+        String stored = prefs.getString(K_PUTER_TOKEN);
+        boolean storedBlank = stored == null || stored.isBlank();
+        String env = System.getenv("PUTER_AUTH_TOKEN");
+        if (env == null || env.isBlank()) {
+            env = System.getenv("PUTER_API_KEY");
+        }
+        return storedBlank && env != null && !env.isBlank();
+    }
+
+    public void setPuterToken(String token) {
+        if (token == null || token.isBlank()) {
+            prefs.deleteString(K_PUTER_TOKEN);
+        } else {
+            prefs.setString(K_PUTER_TOKEN, token.trim());
+        }
+    }
+
+    public String getPuterModel() {
+        String m = prefs.getString(K_PUTER_MODEL);
+        return (m == null || m.isBlank()) ? DEFAULT_PUTER_MODEL : m;
+    }
+
+    public void setPuterModel(String model) {
+        prefs.setString(K_PUTER_MODEL, model);
     }
 
     // ---- model & thinking level -------------------------------------------

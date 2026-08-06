@@ -1,10 +1,13 @@
 package com.example.burpgemini.chat;
 
+import burp.api.montoya.http.message.HttpRequestResponse;
+
+import com.example.burpgemini.ai.AiProvider;
+import com.example.burpgemini.ai.Neutral.ChatMessage;
+import com.example.burpgemini.ai.Neutral.ToolCallRequest;
+import com.example.burpgemini.ai.Neutral.ToolResult;
+import com.example.burpgemini.ai.Neutral.TurnResult;
 import com.example.burpgemini.config.Settings;
-import com.example.burpgemini.gemini.GeminiClient;
-import com.example.burpgemini.gemini.GeminiModels.Content;
-import com.example.burpgemini.gemini.GeminiModels.FunctionCall;
-import com.example.burpgemini.gemini.GeminiModels.Part;
 import com.example.burpgemini.gemini.SystemPrompt;
 import com.example.burpgemini.safety.ActionRequest;
 import com.example.burpgemini.safety.ConfirmationManager;
@@ -12,12 +15,11 @@ import com.example.burpgemini.safety.ConfirmationManager.Decision;
 import com.example.burpgemini.safety.ScopeGuard;
 import com.example.burpgemini.tools.RiskTier;
 import com.example.burpgemini.tools.ToolExecutor;
+import com.example.burpgemini.tools.ToolRegistry;
 import com.example.burpgemini.util.BurpContext;
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import com.google.gson.JsonObject;
-
-import burp.api.montoya.http.message.HttpRequestResponse;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -26,15 +28,15 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
- * Orchestrates a chat turn — the agent loop.
+ * Orchestrates a chat turn — the agent loop — over a provider-neutral conversation history.
  *
- * <p>Per user message: send the whole history + tool declarations to Gemini; if the reply contains
- * function calls, look up each call's {@link RiskTier}, run Tier 0 immediately and route Tier ≥1
- * through {@link ConfirmationManager} + {@link ScopeGuard}; feed every result back as a
- * {@code functionResponse} and loop until the model replies with text only.
+ * <p>Per user message: send the whole history + tool declarations to the active {@link AiProvider};
+ * if the reply contains tool calls, look up each call's {@link RiskTier}, run Tier 0 immediately and
+ * route Tier ≥1 through {@link ConfirmationManager} + {@link ScopeGuard}; feed every result back and
+ * loop until the model replies with text only.
  *
  * <p><b>Golden rule:</b> a model tool call is only <em>intent</em>. Nothing target-facing runs
- * without passing the confirmation gate and the scope guard first.
+ * without passing the confirmation gate and the scope guard first — this is provider-independent.
  */
 public final class ChatController {
 
@@ -44,29 +46,29 @@ public final class ChatController {
 
     private final BurpContext ctx;
     private final Settings settings;
-    private final GeminiClient gemini;
+    private final List<AiProvider> providers;
     private final ToolExecutor executor;
     private final ConfirmationManager confirmations;
     private final ScopeGuard scopeGuard;
+    private final ToolRegistry registry;
     private final ChatTab tab;
-    private final com.example.burpgemini.tools.ToolRegistry registry;
 
     private final Gson pretty = new GsonBuilder().setPrettyPrinting().disableHtmlEscaping().create();
 
     /** Full conversation history for the agent loop (excludes the system prompt). */
-    private final List<Content> history = new ArrayList<>();
+    private final List<ChatMessage> history = new ArrayList<>();
+    private volatile String lastProviderId;
 
     private final AtomicBoolean turnRunning = new AtomicBoolean(false);
     private volatile boolean cancelled = false;
     private volatile CompletableFuture<Decision> pendingConfirmation;
 
-    public ChatController(BurpContext ctx, Settings settings, GeminiClient gemini,
+    public ChatController(BurpContext ctx, Settings settings, List<AiProvider> providers,
                           ToolExecutor executor, ConfirmationManager confirmations,
-                          ScopeGuard scopeGuard, com.example.burpgemini.tools.ToolRegistry registry,
-                          ChatTab tab) {
+                          ScopeGuard scopeGuard, ToolRegistry registry, ChatTab tab) {
         this.ctx = ctx;
         this.settings = settings;
-        this.gemini = gemini;
+        this.providers = providers;
         this.executor = executor;
         this.confirmations = confirmations;
         this.scopeGuard = scopeGuard;
@@ -74,11 +76,23 @@ public final class ChatController {
         this.tab = tab;
     }
 
+    /** The provider selected in settings (defaults to the first registered one). */
+    public AiProvider activeProvider() {
+        String id = settings.getProvider();
+        for (AiProvider p : providers) {
+            if (p.id().equals(id)) {
+                return p;
+            }
+        }
+        return providers.get(0);
+    }
+
     // ---- entry points (called from the EDT) --------------------------------
 
     public void submitUserMessage(String text) {
-        if (!settings.hasApiKey()) {
-            tab.addNotice("No Gemini API key set. Add one in the Config tab (or set GEMINI_API_KEY).");
+        AiProvider provider = activeProvider();
+        if (!provider.isConfigured()) {
+            tab.addNotice(provider.notConfiguredHint());
             return;
         }
         if (!turnRunning.compareAndSet(false, true)) {
@@ -92,7 +106,7 @@ public final class ChatController {
         final String composed = composeUserMessage(text);
         ctx.executor().submit(() -> {
             try {
-                runTurn(composed);
+                runTurn(composed, provider);
             } catch (Throwable t) {
                 ctx.logError("Chat turn failed: " + t, t);
                 tab.addNotice("⚠ Internal error: " + t.getMessage());
@@ -106,7 +120,9 @@ public final class ChatController {
 
     public void cancelCurrentTurn() {
         cancelled = true;
-        gemini.cancelInFlight();
+        for (AiProvider p : providers) {
+            p.cancelInFlight();
+        }
         CompletableFuture<Decision> pc = pendingConfirmation;
         if (pc != null && !pc.isDone()) {
             pc.complete(Decision.deny("Turn cancelled by operator."));
@@ -120,10 +136,17 @@ public final class ChatController {
 
     // ---- the agent loop ----------------------------------------------------
 
-    private void runTurn(String composedUserText) {
-        history.add(Content.userText(composedUserText));
+    private void runTurn(String composedUserText, AiProvider provider) {
+        // Conversation formats differ between providers; switching starts a fresh session.
+        if (lastProviderId != null && !lastProviderId.equals(provider.id()) && !history.isEmpty()) {
+            history.clear();
+            tab.addNotice("Switched to " + provider.displayName()
+                    + " — started a new session (history isn't shared across providers).");
+        }
+        lastProviderId = provider.id();
+
+        history.add(ChatMessage.user(composedUserText));
         trimHistory();
-        gemini.setApiKey(settings.getApiKey());
 
         for (int step = 0; step < MAX_TOOL_STEPS; step++) {
             if (cancelled) {
@@ -132,9 +155,7 @@ public final class ChatController {
             }
 
             tab.setThinking(true);
-            GeminiClient.GeminiResult res = gemini.sendTurn(
-                    SystemPrompt.TEXT, history, registry.geminiTools(),
-                    settings.getModel(), settings.getThinkingLevel());
+            TurnResult res = provider.sendTurn(SystemPrompt.TEXT, history, registry.toolSpecs());
             tab.setThinking(false);
 
             if (cancelled) {
@@ -146,30 +167,31 @@ public final class ChatController {
                     tab.addNotice("Cancelled.");
                 } else {
                     tab.addNotice("⚠ " + res.errorMessage);
-                    ctx.logError("Gemini turn error (HTTP " + res.httpStatus + "): " + res.errorMessage);
+                    ctx.logError(provider.displayName() + " turn error (HTTP " + res.httpStatus
+                            + "): " + res.errorMessage);
                 }
                 return;
             }
 
-            history.add(res.modelContent);
+            history.add(res.modelMessage);
             if (res.text != null && !res.text.isBlank()) {
                 tab.addAssistantMessage(res.text);
             }
-            if (res.functionCalls.isEmpty()) {
+            if (res.toolCalls.isEmpty()) {
                 return; // text-only reply — turn complete
             }
 
-            // Execute the (possibly parallel) function calls in order, gating each.
-            List<Part> responseParts = new ArrayList<>();
-            for (FunctionCall fc : res.functionCalls) {
+            // Execute the (possibly parallel) tool calls in order, gating each.
+            List<ToolResult> results = new ArrayList<>();
+            for (ToolCallRequest call : res.toolCalls) {
                 if (cancelled) {
-                    responseParts.add(Part.functionResponse(fc.name, denied("Turn cancelled.")));
+                    results.add(new ToolResult(call.id, call.name, denied("Turn cancelled.")));
                     continue;
                 }
-                JsonObject response = handleFunctionCall(fc, res.text);
-                responseParts.add(Part.functionResponse(fc.name, response));
+                JsonObject response = handleToolCall(call, res.text);
+                results.add(new ToolResult(call.id, call.name, response));
             }
-            history.add(new Content("user", responseParts));
+            history.add(ChatMessage.toolResults(results));
 
             if (cancelled) {
                 tab.addNotice("Cancelled.");
@@ -179,12 +201,10 @@ public final class ChatController {
         tab.addNotice("Stopped after " + MAX_TOOL_STEPS + " tool steps to avoid an endless loop.");
     }
 
-    /**
-     * Run one function call through the risk gate and return its {@code functionResponse} payload.
-     */
-    private JsonObject handleFunctionCall(FunctionCall fc, String rationale) {
-        String tool = fc.name;
-        JsonObject args = fc.args != null ? fc.args : new JsonObject();
+    /** Run one tool call through the risk gate and return its result payload. */
+    private JsonObject handleToolCall(ToolCallRequest call, String rationale) {
+        String tool = call.name;
+        JsonObject args = call.args != null ? call.args : new JsonObject();
         RiskTier tier = RiskTier.forTool(tool);
         ToolCard card = tab.addToolCard(tool, summarizeArgs(args), tier);
 
@@ -203,7 +223,6 @@ public final class ChatController {
                 ? scopeGuard.check(targets)
                 : permissiveScope();
 
-        // Hard scope block: never even reaches confirmation.
         if (scope.blocked) {
             card.setBlocked(scope.summary);
             ctx.logInfo("[tool] " + tool + " BLOCKED out-of-scope: " + scope.summary);
@@ -231,7 +250,6 @@ public final class ChatController {
             ctx.logInfo("[tool] " + tool + " DENIED: " + decision.reason);
             return denied(decision.reason == null ? "Operator denied the action." : decision.reason);
         }
-        // Out-of-scope override must be explicitly confirmed.
         if (scope.requiresOverride && !decision.outOfScopeConfirmed) {
             card.setDenied("Out-of-scope override not confirmed.");
             ctx.logInfo("[tool] " + tool + " DENIED: out-of-scope override not confirmed");
@@ -248,7 +266,6 @@ public final class ChatController {
 
     // ---- helpers -----------------------------------------------------------
 
-    /** Attach a compact summary of any right-clicked context items to the user's message. */
     private String composeUserMessage(String text) {
         List<HttpRequestResponse> items = ctx.contextItems();
         if (items == null || items.isEmpty()) {
@@ -322,7 +339,6 @@ public final class ChatController {
         return o;
     }
 
-    /** Keep the system prompt + recent turns; drop the oldest content when history grows too large. */
     private void trimHistory() {
         if (history.size() <= HISTORY_SOFT_LIMIT) {
             return;
@@ -331,22 +347,10 @@ public final class ChatController {
         for (int i = 0; i < remove && !history.isEmpty(); i++) {
             history.remove(0);
         }
-        // Avoid a leading functionResponse with no preceding functionCall.
-        while (!history.isEmpty() && isFunctionResponse(history.get(0))) {
+        // Avoid a leading tool-result message with no preceding tool call.
+        while (!history.isEmpty() && history.get(0).toolResults != null) {
             history.remove(0);
         }
         ctx.logInfo("[history] trimmed to " + history.size() + " messages");
-    }
-
-    private static boolean isFunctionResponse(Content c) {
-        if (c == null || c.parts == null) {
-            return false;
-        }
-        for (Part p : c.parts) {
-            if (p.functionResponse != null) {
-                return true;
-            }
-        }
-        return false;
     }
 }

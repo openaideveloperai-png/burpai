@@ -6,11 +6,13 @@ import burp.api.montoya.http.message.HttpRequestResponse;
 import burp.api.montoya.ui.contextmenu.ContextMenuEvent;
 import burp.api.montoya.ui.contextmenu.ContextMenuItemsProvider;
 
+import com.example.burpgemini.ai.AiProvider;
+import com.example.burpgemini.ai.GeminiProvider;
+import com.example.burpgemini.ai.OpenAiCompatibleProvider;
 import com.example.burpgemini.chat.ChatController;
 import com.example.burpgemini.chat.ChatTab;
 import com.example.burpgemini.config.ConfigTab;
 import com.example.burpgemini.config.Settings;
-import com.example.burpgemini.gemini.GeminiClient;
 import com.example.burpgemini.safety.ConfirmationManager;
 import com.example.burpgemini.safety.ScopeGuard;
 import com.example.burpgemini.tools.ToolExecutor;
@@ -37,25 +39,29 @@ public final class BurpGeminiExtension implements BurpExtension {
 
     @Override
     public void initialize(MontoyaApi api) {
-        api.extension().setName("Gemini Assistant");
+        api.extension().setName("AI Assistant (Gemini / Puter)");
 
         // Core wiring.
         Settings settings = new Settings(api);
         this.ctx = new BurpContext(api, settings);
 
-        GeminiClient gemini = new GeminiClient();
         ToolRegistry registry = new ToolRegistry();
         ToolExecutor executor = new ToolExecutor(ctx);
         ScopeGuard scopeGuard = new ScopeGuard(api, settings);
         ConfirmationManager confirmations = new ConfirmationManager(settings);
 
+        // AI providers (switchable). First entry is the default.
+        List<AiProvider> providers = List.of(
+                new GeminiProvider(ctx),
+                new OpenAiCompatibleProvider(ctx));
+
         // UI + controller.
         ChatTab chatTab = new ChatTab(ctx, settings);
         ChatController controller = new ChatController(
-                ctx, settings, gemini, executor, confirmations, scopeGuard, registry, chatTab);
+                ctx, settings, providers, executor, confirmations, scopeGuard, registry, chatTab);
         chatTab.setController(controller);
 
-        ConfigTab configTab = new ConfigTab(ctx, settings, gemini);
+        ConfigTab configTab = new ConfigTab(ctx, settings, providers);
         configTab.setChatTab(chatTab);
 
         // Register suite tabs.
@@ -69,15 +75,14 @@ public final class BurpGeminiExtension implements BurpExtension {
         api.extension().registerUnloadingHandler(() -> {
             try {
                 controller.cancelCurrentTurn();
-                gemini.cancelInFlight();
             } finally {
                 ctx.shutdown();
             }
-            api.logging().logToOutput("Gemini Assistant unloaded; background work stopped.");
+            api.logging().logToOutput("AI Assistant unloaded; background work stopped.");
         });
 
-        ctx.logInfo("Gemini Assistant loaded. Set your API key in the 'AI Assistant Config' tab. "
-                + "For authorized, in-scope testing only.");
+        ctx.logInfo("AI Assistant loaded. Pick a provider and set its key/token in the "
+                + "'AI Assistant Config' tab. For authorized, in-scope testing only.");
     }
 
     /** Provides the right-click action that attaches selected requests to the chat as context. */

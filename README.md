@@ -1,7 +1,11 @@
-# Burp Gemini Assistant
+# Burp AI Assistant (Gemini / Puter)
 
-A Burp Suite extension (Java, Montoya API) that embeds a **Google Gemini** assistant to support
-**authorized, in‑scope penetration testing only**.
+A Burp Suite extension (Java, Montoya API) that embeds an AI assistant to support
+**authorized, in‑scope penetration testing only**. Pick your backend with a switch:
+
+- **Google Gemini** — the `generateContent` REST API with **your own API key**.
+- **Puter AI** — Puter's **OpenAI‑compatible** endpoint (proxies GPT / Claude / Gemini / Grok) with
+  a **Puter auth token**.
 
 The design is built around one rule:
 
@@ -10,8 +14,8 @@ The design is built around one rule:
 > you approve, and only after a scope check. Passive analysis of already‑captured traffic is free;
 > anything that touches a target is gated.
 
-It calls the Gemini REST API directly with **your own API key** — it does **not** use Burp's native
-`ai` package or Burp AI credits.
+Both providers are called directly with **your own key/token** — it does **not** use Burp's native
+`ai` package or Burp AI credits. The safety gating is provider‑independent.
 
 > ⚠️ **For authorized testing only.** Use this against systems you have explicit permission to test.
 > The confirmation gates and scope enforcement are core to the design, not optional polish.
@@ -73,27 +77,45 @@ bundled.
 
 ---
 
-## Get & set a Gemini API key
+## Choose a provider & set credentials
 
+Open the **AI Assistant Config** tab and pick **AI provider**. The form greys out the fields for the
+provider you're not using. Then **Save** and click **Test connection** (a bad key/token reports the
+exact error).
+
+### Option A — Google Gemini
 1. Create a key at **https://aistudio.google.com/apikey**.
-2. Open the **AI Assistant Config** tab, paste the key, click **Save**, then **Test connection**.
-   - You should see *"OK — Gemini responded successfully"*. A bad key reports the exact error.
-3. Alternatively, set the `GEMINI_API_KEY` environment variable before launching Burp and leave the
-   field blank — the extension uses it as a fallback so the secret is never persisted.
+2. Paste it into **Gemini API key**, pick a **Gemini model** and **Thinking level**, **Save**.
+3. Or set the `GEMINI_API_KEY` environment variable and leave the field blank (never persisted).
 
-> **Secrets note:** if you Save the key, it is stored in Burp's preferences, which are **not strongly
-> encrypted at rest**. The key is never logged and never written into chat transcripts.
+### Option B — Puter AI (OpenAI‑compatible)
+1. Sign in at **https://puter.com/dashboard**, open the **API tokens** section, click **Create token**.
+2. Paste it into **Puter auth token**, choose a **Puter model** (e.g. `openai/gpt-5.3-chat`,
+   `claude-sonnet-4-latest`, `google/gemini-2.5-flash`, `x-ai/grok-4` — the field is editable), **Save**.
+3. Or set the `PUTER_AUTH_TOKEN` environment variable and leave the field blank.
+
+Puter exposes an **OpenAI‑compatible** Chat Completions endpoint
+(`https://api.puter.com/puterai/openai/v1/chat/completions`), so tool/function calling works through
+the standard OpenAI convention. Switching providers starts a fresh chat session (the two wire formats
+aren't interchangeable mid‑conversation).
+
+> **Secrets note:** saved keys/tokens live in Burp's preferences, which are **not strongly encrypted
+> at rest**. They are never logged and never written into chat transcripts. Prefer the environment
+> variables if you don't want them persisted.
 
 ### Settings
 
 | Setting | Default | Effect |
 |---|---|---|
-| Model | `gemini-3.1-pro-preview-customtools` | The custom‑tools variant prioritises the declared tools for reliable function calling. |
-| Thinking level | High | Gemini 3 uses `thinking_level` (Low = fast/cheap, High = deep) instead of temperature/top‑p/top‑k. |
+| AI provider | Google Gemini | Switch between Gemini and Puter AI. |
+| Gemini model | `gemini-3.1-pro-preview-customtools` | Model used when the provider is Gemini. |
+| Thinking level | High | Reasoning depth (`thinkingConfig.thinkingBudget`: High = dynamic, Low = minimal). |
+| Puter auth token | — | Bearer token for Puter's OpenAI‑compatible endpoint. |
+| Puter model | `openai/gpt-5.3-chat` | Model used when the provider is Puter (editable). |
 | Require confirmation before active actions | **ON** | Governs Tier 1–2. Tier 3 always confirms regardless. |
 | Respect Burp scope | **ON** | Blocks out‑of‑scope target traffic. |
 | Allow out‑of‑scope with explicit confirmation | **OFF** | If ON, out‑of‑scope actions can proceed only after ticking a red per‑action checkbox. |
-| Persist chat transcripts | OFF | (Reserved) Transcripts never contain the API key. |
+| Persist chat transcripts | OFF | (Reserved) Transcripts never contain secrets. |
 
 When a safety toggle is relaxed, a persistent warning banner appears at the top of the chat tab.
 
@@ -135,20 +157,26 @@ Unknown/unmapped tools default to Tier 3 (fail safe).
 ## How it works (architecture)
 
 ```
-ChatTab  ──▶  ChatController (the agent loop)  ──▶  GeminiClient  ──▶  Gemini generateContent
-   ▲               │  1. send history + tool declarations
-   │               │  2. model replies with text and/or functionCall(s)
-   │               │  3. per call: RiskTier → ScopeGuard → ConfirmationManager → ToolExecutor
-   └── tool cards ◀┘  4. feed each result back as functionResponse, loop until text‑only
+ChatTab ─▶ ChatController (agent loop) ─▶ AiProvider ─▶ Gemini generateContent
+   ▲            │  1. send neutral history + tool specs        └▶ Puter (OpenAI chat/completions)
+   │            │  2. model replies with text and/or tool call(s)
+   │            │  3. per call: RiskTier → ScopeGuard → ConfirmationManager → ToolExecutor
+   └ tool cards ┘  4. feed each result back, loop until text‑only
 ```
+
+The conversation is kept in a **provider‑neutral** message model; each provider translates it to/from
+its own wire format, so the same agent loop and the same safety gating drive either backend.
 
 Key files:
 
-- `BurpGeminiExtension` — entry point (`BurpExtension#initialize`); registers tabs, the context‑menu
-  action, and an unloading handler that stops the thread pool.
-- `chat/ChatController` — the agent loop; comments call out the tiering and scope enforcement.
-- `gemini/GeminiClient` — `generateContent` REST calls, retries/backoff (401/403/429/5xx), cancellation.
-- `tools/ToolRegistry` — the function declarations (JSON‑Schema) sent to Gemini.
+- `BurpGeminiExtension` — entry point (`BurpExtension#initialize`); builds the providers, registers
+  tabs, the context‑menu action, and an unloading handler that stops the thread pool.
+- `chat/ChatController` — the agent loop over neutral history; comments call out tiering + scope.
+- `ai/AiProvider` + `ai/Neutral` — the provider interface and neutral conversation model.
+- `ai/GeminiProvider` — Gemini `generateContent`; preserves each `thoughtSignature` so tool calls work.
+- `ai/OpenAiCompatibleProvider` — Puter's OpenAI‑compatible endpoint (tools / tool_calls).
+- `ai/HttpTransport` — shared cancellable POST with retries/backoff (429/5xx/network).
+- `tools/ToolRegistry` — the neutral tool specs (name + description + JSON‑Schema params).
 - `tools/ToolExecutor` — maps tool calls to Montoya operations; token‑efficient JSON results.
 - `tools/RiskTier` — tier enum + tool→tier policy (fails safe).
 - `safety/ScopeGuard` — `isInScope` checks + override policy.

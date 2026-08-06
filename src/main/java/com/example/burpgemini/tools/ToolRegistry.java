@@ -1,7 +1,6 @@
 package com.example.burpgemini.tools;
 
-import com.example.burpgemini.gemini.GeminiModels.FunctionDeclaration;
-import com.example.burpgemini.gemini.GeminiModels.Tool;
+import com.example.burpgemini.ai.Neutral.ToolSpec;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 
@@ -9,27 +8,19 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Declares the tools exposed to Gemini as {@code functionDeclarations}. Each declaration is a
- * name + description + JSON-Schema (OpenAPI subset) parameters object. The declared set is the
+ * Declares the tools exposed to the model as provider-neutral {@link ToolSpec}s. Each is a
+ * name + description + JSON-Schema (OpenAPI subset) parameters object; each provider translates them
+ * into its own wire format (Gemini functionDeclarations, OpenAI tools, …). The declared set is the
  * <em>only</em> way the model can affect a target, and every Tier ≥1 call is mediated before it runs
  * (see {@link RiskTier} and the safety package). There is intentionally no arbitrary shell/OS tool.
  */
 public final class ToolRegistry {
 
-    /** Wrap all declarations in the single {@code tools[0].functionDeclarations} array Gemini expects. */
-    public List<Tool> geminiTools() {
-        Tool tool = new Tool();
-        tool.functionDeclarations = declarations();
-        List<Tool> tools = new ArrayList<>();
-        tools.add(tool);
-        return tools;
-    }
-
-    public List<FunctionDeclaration> declarations() {
-        List<FunctionDeclaration> d = new ArrayList<>();
+    public List<ToolSpec> toolSpecs() {
+        List<ToolSpec> d = new ArrayList<>();
 
         // ---- Tier 0: read-only ---------------------------------------------
-        d.add(new FunctionDeclaration("list_proxy_history",
+        d.add(new ToolSpec("list_proxy_history",
                 "List entries from Burp's Proxy HTTP history (already-captured traffic). Read-only.",
                 obj(props(
                         p("limit", intType("Max entries to return (default 50).")),
@@ -39,7 +30,7 @@ public final class ToolRegistry {
                         p("status", intType("Filter by exact response status code."))
                 ), req())));
 
-        d.add(new FunctionDeclaration("get_request_response",
+        d.add(new ToolSpec("get_request_response",
                 "Fetch the full request and response for one captured item. Read-only.",
                 obj(props(
                         p("source", enumType("Where the id comes from.", "proxy", "sitemap", "selection")),
@@ -48,7 +39,7 @@ public final class ToolRegistry {
                         p("max_body_bytes", intType("Truncate each body to this many bytes (default 8000)."))
                 ), req("source", "id"))));
 
-        d.add(new FunctionDeclaration("get_site_map",
+        d.add(new ToolSpec("get_site_map",
                 "List a deduplicated set of endpoints from Burp's Target site map. Read-only.",
                 obj(props(
                         p("host_contains", strType("Only endpoints whose host contains this substring.")),
@@ -56,11 +47,11 @@ public final class ToolRegistry {
                         p("limit", intType("Max endpoints to return (default 200)."))
                 ), req())));
 
-        d.add(new FunctionDeclaration("get_selected_items",
+        d.add(new ToolSpec("get_selected_items",
                 "Return the request(s) the operator attached via right-click 'Send to AI Assistant'. Read-only.",
                 obj(props(), req())));
 
-        d.add(new FunctionDeclaration("search_traffic",
+        d.add(new ToolSpec("search_traffic",
                 "Search captured requests/responses for a substring and return small snippets. Read-only.",
                 obj(props(
                         p("query", strType("Substring to search for.")),
@@ -70,11 +61,11 @@ public final class ToolRegistry {
                         p("limit", intType("Max matches to return (default 50)."))
                 ), req("query"))));
 
-        d.add(new FunctionDeclaration("get_scope",
+        d.add(new ToolSpec("get_scope",
                 "Report Burp scope status for the hosts seen in captured traffic (isInScope checks). Read-only.",
                 obj(props(), req())));
 
-        d.add(new FunctionDeclaration("decode_transform",
+        d.add(new ToolSpec("decode_transform",
                 "Locally decode/encode a string (no target traffic). JWT decode is non-verifying, header/payload only.",
                 obj(props(
                         p("data", strType("The string to transform.")),
@@ -84,7 +75,7 @@ public final class ToolRegistry {
                 ), req("data", "operation"))));
 
         // ---- Tier 1: confirm, staging only ---------------------------------
-        d.add(new FunctionDeclaration("send_to_repeater",
+        d.add(new ToolSpec("send_to_repeater",
                 "Stage a (optionally modified) request in Burp Repeater. Does NOT auto-send. Requires confirmation.",
                 obj(props(
                         p("id", strType("Base item id.")),
@@ -93,19 +84,19 @@ public final class ToolRegistry {
                         p("modifications", mutationArray())
                 ), req("id", "source"))));
 
-        d.add(new FunctionDeclaration("add_to_scope",
+        d.add(new ToolSpec("add_to_scope",
                 "Add an include rule to Burp scope. Requires confirmation. Do not call unless the operator asks.",
                 obj(props(
                         p("url_prefix", strType("URL prefix to include, e.g. https://app.example.com/"))
                 ), req("url_prefix"))));
 
-        d.add(new FunctionDeclaration("remove_from_scope",
+        d.add(new ToolSpec("remove_from_scope",
                 "Add an exclude rule to Burp scope. Requires confirmation.",
                 obj(props(
                         p("url_prefix", strType("URL prefix to exclude."))
                 ), req("url_prefix"))));
 
-        d.add(new FunctionDeclaration("send_to_intruder",
+        d.add(new ToolSpec("send_to_intruder",
                 "Stage an Intruder attack with payload positions. Burp requires manual start. Requires confirmation.",
                 obj(props(
                         p("id", strType("Base item id.")),
@@ -118,7 +109,7 @@ public final class ToolRegistry {
                 ), req("id", "source"))));
 
         // ---- Tier 2: confirm + warning, sends traffic ----------------------
-        d.add(new FunctionDeclaration("send_http_request",
+        d.add(new ToolSpec("send_http_request",
                 "Send ONE request (optionally modified) to the target and return the response. "
                         + "Requires confirmation; the operator sees a diff vs. the base request.",
                 obj(props(
@@ -128,7 +119,7 @@ public final class ToolRegistry {
                         p("modifications", mutationArray())
                 ), req())));
 
-        d.add(new FunctionDeclaration("start_passive_audit",
+        d.add(new ToolSpec("start_passive_audit",
                 "Run Burp's passive checks over the given captured items and return discovered issues. Requires confirmation.",
                 obj(props(
                         p("ids", arrayOf(strType("An item id."), "Item ids to audit.")),
@@ -136,7 +127,7 @@ public final class ToolRegistry {
                 ), req("ids", "source"))));
 
         // ---- Tier 3: confirm + strong warning ------------------------------
-        d.add(new FunctionDeclaration("start_active_audit",
+        d.add(new ToolSpec("start_active_audit",
                 "Start an ACTIVE scan (can generate many requests and attack payloads). Runs in the background. "
                         + "Requires strong confirmation.",
                 obj(props(
@@ -145,7 +136,7 @@ public final class ToolRegistry {
                         p("url", strType("Alternatively, a URL to seed a fresh request for the audit."))
                 ), req())));
 
-        d.add(new FunctionDeclaration("run_request_sequence",
+        d.add(new ToolSpec("run_request_sequence",
                 "Send a SERIES of crafted requests (e.g. iterate an object id to probe IDOR/BOLA). "
                         + "Requires strong confirmation; the operator sees the count and a sample.",
                 obj(props(

@@ -1,7 +1,8 @@
 package com.example.burpgemini.config;
 
+import com.example.burpgemini.ai.AiProvider;
+import com.example.burpgemini.ai.OpenAiCompatibleProvider;
 import com.example.burpgemini.chat.ChatTab;
-import com.example.burpgemini.gemini.GeminiClient;
 import com.example.burpgemini.util.BurpContext;
 
 import javax.swing.BorderFactory;
@@ -22,42 +23,60 @@ import java.awt.Font;
 import java.awt.GridBagConstraints;
 import java.awt.GridBagLayout;
 import java.awt.Insets;
+import java.util.List;
 
 /**
- * The settings UI. Everything here persists via {@link Settings} (Burp preferences). The API key is
- * masked, never echoed in full, and never logged.
+ * The settings UI. Everything persists via {@link Settings} (Burp preferences). Secrets (the Gemini
+ * API key and the Puter auth token) are masked, never echoed in full, and never logged.
  */
 public final class ConfigTab extends JPanel {
 
     private final BurpContext ctx;
     private final Settings settings;
-    private final GeminiClient gemini;
-    private ChatTab chatTab; // set after construction to refresh its banner
+    private final List<AiProvider> providers;
+    private ChatTab chatTab;
 
+    private final JComboBox<String> providerBox = new JComboBox<>();
+
+    // Gemini
     private final JPasswordField apiKeyField = new JPasswordField(36);
     private final JComboBox<String> modelBox = new JComboBox<>(Settings.MODELS);
     private final JComboBox<String> thinkingBox =
             new JComboBox<>(new String[]{Settings.THINKING_HIGH, Settings.THINKING_LOW});
+
+    // Puter
+    private final JPasswordField puterTokenField = new JPasswordField(36);
+    private final JComboBox<String> puterModelBox = new JComboBox<>(OpenAiCompatibleProvider.MODELS);
+
+    // Safety
     private final JCheckBox requireConfirm = new JCheckBox("Require confirmation before active actions (Tier 1–2)");
     private final JCheckBox respectScope = new JCheckBox("Respect Burp scope (block out-of-scope target traffic)");
     private final JCheckBox allowOutOfScope = new JCheckBox("Allow out-of-scope with explicit confirmation");
-    private final JCheckBox persistTranscripts = new JCheckBox("Persist chat transcripts (never includes the API key)");
+    private final JCheckBox persistTranscripts = new JCheckBox("Persist chat transcripts (never includes secrets)");
     private final JLabel statusLabel = new JLabel(" ");
 
-    public ConfigTab(BurpContext ctx, Settings settings, GeminiClient gemini) {
+    // Field group labels, so we can grey out the inactive provider's section.
+    private JLabel geminiHeader;
+    private JLabel puterHeader;
+
+    public ConfigTab(BurpContext ctx, Settings settings, List<AiProvider> providers) {
         this.ctx = ctx;
         this.settings = settings;
-        this.gemini = gemini;
+        this.providers = providers;
+
+        for (AiProvider p : providers) {
+            providerBox.addItem(p.displayName());
+        }
+        puterModelBox.setEditable(true);
 
         setLayout(new BoxLayout(this, BoxLayout.Y_AXIS));
         setBorder(BorderFactory.createEmptyBorder(14, 16, 14, 16));
 
-        add(title("Burp Gemini Assistant — Settings"));
+        add(title("Burp AI Assistant — Settings"));
         add(Box.createVerticalStrut(4));
         add(reminder("For authorized, in-scope penetration testing only. The AI proposes actions; "
                 + "you confirm; the extension executes. Nothing target-facing runs without your approval."));
         add(Box.createVerticalStrut(12));
-
         add(buildForm());
         add(Box.createVerticalStrut(12));
         add(buildButtons());
@@ -66,7 +85,9 @@ public final class ConfigTab extends JPanel {
         add(statusLabel);
         add(Box.createVerticalGlue());
 
+        providerBox.addActionListener(e -> updateEnabledState());
         loadFromSettings();
+        updateEnabledState();
     }
 
     public void setChatTab(ChatTab chatTab) {
@@ -76,12 +97,27 @@ public final class ConfigTab extends JPanel {
     private JComponent buildForm() {
         JPanel form = new JPanel(new GridBagLayout());
         form.setAlignmentX(Component.LEFT_ALIGNMENT);
-        form.setMaximumSize(new Dimension(760, Integer.MAX_VALUE));
+        form.setMaximumSize(new Dimension(780, Integer.MAX_VALUE));
         GridBagConstraints c = new GridBagConstraints();
         c.insets = new Insets(4, 4, 4, 8);
         c.anchor = GridBagConstraints.WEST;
-
         int row = 0;
+
+        c.gridx = 0;
+        c.gridy = row;
+        form.add(new JLabel("AI provider:"), c);
+        c.gridx = 1;
+        form.add(providerBox, c);
+        row++;
+
+        // ---- Gemini ----
+        geminiHeader = sectionLabel("Google Gemini");
+        c.gridx = 0;
+        c.gridy = row;
+        c.gridwidth = 2;
+        form.add(geminiHeader, c);
+        c.gridwidth = 1;
+        row++;
 
         c.gridx = 0;
         c.gridy = row;
@@ -96,15 +132,12 @@ public final class ConfigTab extends JPanel {
 
         c.gridx = 1;
         c.gridy = row;
-        JLabel keyHint = new JLabel("Create one at https://aistudio.google.com/apikey. "
-                + "Or set the GEMINI_API_KEY environment variable.");
-        keyHint.setFont(keyHint.getFont().deriveFont(Font.ITALIC, keyHint.getFont().getSize() - 1f));
-        form.add(keyHint, c);
+        form.add(hint("Create one at https://aistudio.google.com/apikey, or set GEMINI_API_KEY."), c);
         row++;
 
         c.gridx = 0;
         c.gridy = row;
-        form.add(new JLabel("Model:"), c);
+        form.add(new JLabel("Gemini model:"), c);
         c.gridx = 1;
         form.add(modelBox, c);
         row++;
@@ -116,17 +149,51 @@ public final class ConfigTab extends JPanel {
         form.add(thinkingBox, c);
         row++;
 
-        // Safety toggles.
-        requireConfirm.setAlignmentX(Component.LEFT_ALIGNMENT);
-        respectScope.setAlignmentX(Component.LEFT_ALIGNMENT);
-        allowOutOfScope.setAlignmentX(Component.LEFT_ALIGNMENT);
-        persistTranscripts.setAlignmentX(Component.LEFT_ALIGNMENT);
+        // ---- Puter ----
+        puterHeader = sectionLabel("Puter AI (OpenAI-compatible)");
+        c.gridx = 0;
+        c.gridy = row;
+        c.gridwidth = 2;
+        form.add(puterHeader, c);
+        c.gridwidth = 1;
+        row++;
 
+        c.gridx = 0;
+        c.gridy = row;
+        form.add(new JLabel("Puter auth token:"), c);
+        c.gridx = 1;
+        c.fill = GridBagConstraints.HORIZONTAL;
+        c.weightx = 1;
+        form.add(puterTokenField, c);
+        c.weightx = 0;
+        c.fill = GridBagConstraints.NONE;
+        row++;
+
+        c.gridx = 1;
+        c.gridy = row;
+        form.add(hint("Get one at puter.com/dashboard → API tokens → Create token, "
+                + "or set PUTER_AUTH_TOKEN. Puter proxies GPT/Claude/Gemini/Grok."), c);
+        row++;
+
+        c.gridx = 0;
+        c.gridy = row;
+        form.add(new JLabel("Puter model:"), c);
+        c.gridx = 1;
+        c.fill = GridBagConstraints.HORIZONTAL;
+        form.add(puterModelBox, c);
+        c.fill = GridBagConstraints.NONE;
+        row++;
+
+        // ---- Safety ----
         c.gridx = 0;
         c.gridy = row;
         c.gridwidth = 2;
         form.add(sectionLabel("Safety"), c);
         row++;
+        requireConfirm.setAlignmentX(Component.LEFT_ALIGNMENT);
+        respectScope.setAlignmentX(Component.LEFT_ALIGNMENT);
+        allowOutOfScope.setAlignmentX(Component.LEFT_ALIGNMENT);
+        persistTranscripts.setAlignmentX(Component.LEFT_ALIGNMENT);
         c.gridy = row++;
         form.add(requireConfirm, c);
         c.gridy = row++;
@@ -143,12 +210,16 @@ public final class ConfigTab extends JPanel {
         JPanel p = new JPanel();
         p.setLayout(new BoxLayout(p, BoxLayout.X_AXIS));
         p.setAlignmentX(Component.LEFT_ALIGNMENT);
-
         JButton save = new JButton("Save");
-        save.addActionListener(e -> onSave());
+        save.addActionListener(e -> {
+            persist();
+            setStatus("Settings saved.", new Color(0x2E7D32));
+            if (chatTab != null) {
+                chatTab.refreshBanner();
+            }
+        });
         JButton test = new JButton("Test connection");
         test.addActionListener(e -> onTest());
-
         p.add(save);
         p.add(Box.createHorizontalStrut(8));
         p.add(test);
@@ -157,72 +228,111 @@ public final class ConfigTab extends JPanel {
     }
 
     private void loadFromSettings() {
-        // Show a placeholder rather than the real key so it is never echoed back in full.
-        if (settings.apiKeyFromEnv()) {
-            apiKeyField.setText("");
-            apiKeyField.putClientProperty("JTextField.placeholderText", "(using GEMINI_API_KEY env var)");
-        } else if (settings.hasApiKey()) {
-            apiKeyField.setText("");
-            apiKeyField.putClientProperty("JTextField.placeholderText", "(saved — leave blank to keep)");
-        }
+        // Show placeholders rather than the real secrets so they are never echoed back in full.
+        apiKeyField.setText("");
+        apiKeyField.putClientProperty("JTextField.placeholderText",
+                settings.apiKeyFromEnv() ? "(using GEMINI_API_KEY env var)"
+                        : settings.hasApiKey() ? "(saved — leave blank to keep)" : "");
+        puterTokenField.setText("");
+        puterTokenField.putClientProperty("JTextField.placeholderText",
+                settings.puterTokenFromEnv() ? "(using PUTER_AUTH_TOKEN env var)"
+                        : settings.hasPuterToken() ? "(saved — leave blank to keep)" : "");
+
+        selectProvider(settings.getProvider());
         modelBox.setSelectedItem(settings.getModel());
         thinkingBox.setSelectedItem(settings.getThinkingLevel());
+        puterModelBox.setSelectedItem(settings.getPuterModel());
         requireConfirm.setSelected(settings.isRequireConfirmActive());
         respectScope.setSelected(settings.isRespectScope());
         allowOutOfScope.setSelected(settings.isAllowOutOfScope());
         persistTranscripts.setSelected(settings.isPersistTranscripts());
     }
 
-    private void onSave() {
-        char[] pw = apiKeyField.getPassword();
-        String key = new String(pw).trim();
-        java.util.Arrays.fill(pw, '\0');
+    private void persist() {
+        char[] gk = apiKeyField.getPassword();
+        String key = new String(gk).trim();
+        java.util.Arrays.fill(gk, '\0');
         if (!key.isEmpty()) {
             settings.setApiKey(key);
             apiKeyField.setText("");
             apiKeyField.putClientProperty("JTextField.placeholderText", "(saved — leave blank to keep)");
         }
+        char[] pk = puterTokenField.getPassword();
+        String token = new String(pk).trim();
+        java.util.Arrays.fill(pk, '\0');
+        if (!token.isEmpty()) {
+            settings.setPuterToken(token);
+            puterTokenField.setText("");
+            puterTokenField.putClientProperty("JTextField.placeholderText", "(saved — leave blank to keep)");
+        }
+
+        settings.setProvider(selectedProviderId());
         settings.setModel((String) modelBox.getSelectedItem());
         settings.setThinkingLevel((String) thinkingBox.getSelectedItem());
+        Object pm = puterModelBox.getSelectedItem();
+        if (pm != null && !pm.toString().isBlank()) {
+            settings.setPuterModel(pm.toString().trim());
+        }
         settings.setRequireConfirmActive(requireConfirm.isSelected());
         settings.setRespectScope(respectScope.isSelected());
         settings.setAllowOutOfScope(allowOutOfScope.isSelected());
         settings.setPersistTranscripts(persistTranscripts.isSelected());
-        setStatus("Settings saved.", new Color(0x2E7D32));
-        ctx.logInfo("Settings saved (model=" + settings.getModel()
-                + ", thinking=" + settings.getThinkingLevel()
+        ctx.logInfo("Settings saved (provider=" + settings.getProvider()
+                + ", geminiModel=" + settings.getModel()
+                + ", puterModel=" + settings.getPuterModel()
                 + ", requireConfirm=" + settings.isRequireConfirmActive()
                 + ", respectScope=" + settings.isRespectScope()
                 + ", allowOOS=" + settings.isAllowOutOfScope() + ")");
-        if (chatTab != null) {
-            chatTab.refreshBanner();
-        }
     }
 
     private void onTest() {
-        // Prefer the value typed in the field; otherwise use the saved/effective key.
-        char[] pw = apiKeyField.getPassword();
-        String typed = new String(pw).trim();
-        java.util.Arrays.fill(pw, '\0');
-        String key = typed.isEmpty() ? settings.getApiKey() : typed;
-        String model = (String) modelBox.getSelectedItem();
-
-        if (key.isEmpty()) {
-            setStatus("No API key to test. Enter one first.", new Color(0xC62828));
+        // Persist first so the test uses exactly what's in the form.
+        persist();
+        AiProvider provider = providers.get(Math.max(0, providerBox.getSelectedIndex()));
+        if (!provider.isConfigured()) {
+            setStatus(provider.notConfiguredHint(), new Color(0xC62828));
             return;
         }
-        setStatus("Testing…", null);
+        setStatus("Testing " + provider.displayName() + "…", null);
         ctx.executor().submit(() -> {
-            GeminiClient.GeminiResult r = gemini.testConnection(key, model);
+            com.example.burpgemini.ai.Neutral.TurnResult r = provider.testConnection();
             SwingUtilities.invokeLater(() -> {
                 if (r.ok) {
-                    setStatus("OK — Gemini responded successfully (model " + model + ").",
+                    setStatus("OK — " + provider.displayName() + " responded successfully.",
                             new Color(0x2E7D32));
                 } else {
                     setStatus("Failed: " + r.errorMessage, new Color(0xC62828));
                 }
             });
         });
+    }
+
+    private void updateEnabledState() {
+        String id = selectedProviderId();
+        boolean gemini = Settings.PROVIDER_GEMINI.equals(id);
+        setGroupEnabled(gemini, geminiHeader, apiKeyField, modelBox, thinkingBox);
+        setGroupEnabled(!gemini, puterHeader, puterTokenField, puterModelBox);
+    }
+
+    private void setGroupEnabled(boolean enabled, JComponent... comps) {
+        for (JComponent comp : comps) {
+            comp.setEnabled(enabled);
+        }
+    }
+
+    private void selectProvider(String id) {
+        for (int i = 0; i < providers.size(); i++) {
+            if (providers.get(i).id().equals(id)) {
+                providerBox.setSelectedIndex(i);
+                return;
+            }
+        }
+        providerBox.setSelectedIndex(0);
+    }
+
+    private String selectedProviderId() {
+        int idx = Math.max(0, providerBox.getSelectedIndex());
+        return providers.get(idx).id();
     }
 
     private void setStatus(String text, Color color) {
@@ -237,15 +347,21 @@ public final class ConfigTab extends JPanel {
         return l;
     }
 
-    private static JComponent sectionLabel(String text) {
+    private static JLabel sectionLabel(String text) {
         JLabel l = new JLabel(text);
         l.setFont(l.getFont().deriveFont(Font.BOLD, l.getFont().getSize() + 1f));
         l.setBorder(BorderFactory.createEmptyBorder(8, 0, 2, 0));
         return l;
     }
 
+    private static JComponent hint(String text) {
+        JLabel l = new JLabel(text);
+        l.setFont(l.getFont().deriveFont(Font.ITALIC, l.getFont().getSize() - 1f));
+        return l;
+    }
+
     private static JComponent reminder(String text) {
-        JLabel l = new JLabel("<html><body style='width:700px'>" + text + "</body></html>");
+        JLabel l = new JLabel("<html><body style='width:720px'>" + text + "</body></html>");
         l.setAlignmentX(Component.LEFT_ALIGNMENT);
         l.setForeground(new Color(0xE65100));
         return l;
