@@ -1,0 +1,45 @@
+plugins {
+    id 'java'
+    // Shadow plugin bundles all runtime dependencies (Gson) into a single fat/shaded JAR.
+    id 'com.gradleup.shadow' version '8.3.6'
+}
+
+group = 'com.example'
+version = '1.0.0'
+
+repositories {
+    mavenCentral()
+}
+
+// Target Java 17 for broad Burp/JDK compatibility even when building on a newer JDK.
+java {
+    sourceCompatibility = JavaVersion.VERSION_17
+    targetCompatibility = JavaVersion.VERSION_17
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.release = 17
+    options.encoding = 'UTF-8'
+}
+
+dependencies {
+    // Montoya API is provided by Burp at runtime -> compileOnly, never bundled.
+    compileOnly 'net.portswigger.burp.extensions:montoya-api:2026.7'
+
+    // JSON (bundled + relocated into the shaded JAR).
+    implementation 'com.google.code.gson:gson:2.11.0'
+}
+
+shadowJar {
+    archiveBaseName = 'burp-gemini-assistant'
+    archiveClassifier = ''
+    archiveVersion = ''
+
+    // Relocate Gson so it can never clash with Burp itself or another loaded extension.
+    relocate 'com.google.gson', 'com.example.burpgemini.shaded.gson'
+}
+
+// `gradle build` should always produce the loadable shaded JAR.
+tasks.named('build') {
+    dependsOn tasks.named('shadowJar')
+}
