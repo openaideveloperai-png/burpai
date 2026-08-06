@@ -35,20 +35,19 @@ public final class OpenAiCompatibleProvider implements AiProvider {
 
     private static final String ENDPOINT = "https://api.puter.com/puterai/openai/v1/chat/completions";
 
-    /**
-     * Models offered in the Config dropdown (editable). Chat-Completions-native models
-     * (gpt-4o family, Claude) are listed first because they handle multi-turn tool calls reliably
-     * in the stateless messages format; GPT-5.x may route through Puter's OpenAI-<em>Responses</em>
-     * bridge, which is stricter about tool-call linkage.
-     */
+    /** Models offered in the Config dropdown (editable) — Puter's OpenAI line plus a couple of others. */
     public static final String[] MODELS = {
-            "openai/gpt-4o-mini",
-            "openai/gpt-4o",
+            "gpt-5.3-chat",
+            "gpt-5.4-nano",
+            "gpt-5.4-mini",
+            "gpt-5.4",
+            "gpt-5.6-luna",
+            "gpt-5.6-terra",
+            "gpt-5.6-sol",
+            "gpt-5.3-codex",
+            "openai/gpt-oss-120b",
             "claude-sonnet-4-latest",
             "google/gemini-2.5-flash",
-            "openai/gpt-5.3-chat",
-            "openai/gpt-5.4-nano",
-            "x-ai/grok-4",
     };
     public static final String DEFAULT_MODEL = MODELS[0];
 
@@ -95,10 +94,19 @@ public final class OpenAiCompatibleProvider implements AiProvider {
             return TurnResult.error(notConfiguredHint(), 0);
         }
         ChatRequest body = new ChatRequest();
-        body.model = settings.getPuterModel();
+        String model = settings.getPuterModel();
+        body.model = model;
         body.messages = toMessages(systemPrompt, history);
-        body.tools = toTools(tools);
-        body.tool_choice = "auto";
+        List<ToolDef> toolDefs = toTools(tools);
+        // Puter's built-in web_search tool (OpenAI models only) — fetches up-to-date info.
+        if (settings.isPuterWebSearch() && isOpenAiModel(model)) {
+            if (toolDefs == null) {
+                toolDefs = new ArrayList<>();
+            }
+            toolDefs.add(new ToolDef("web_search"));
+        }
+        body.tools = toolDefs;
+        body.tool_choice = (toolDefs != null && !toolDefs.isEmpty()) ? "auto" : null;
         return call(body, token);
     }
 
@@ -132,12 +140,8 @@ public final class OpenAiCompatibleProvider implements AiProvider {
                     + (apiMsg == null ? "" : "Details: " + apiMsg), r.status);
         }
         if (r.status == 400 && apiMsg != null && apiMsg.toLowerCase().contains("tool call")) {
-            // Puter routed this model through its OpenAI-Responses bridge, which mishandles the
-            // multi-turn tool-call linkage. A Chat-Completions-native model avoids it.
-            return TurnResult.error("Puter couldn't link the tool call (HTTP 400) — the selected "
-                    + "model routes through Puter's OpenAI-Responses bridge, which breaks multi-turn "
-                    + "tool calling. Switch the Puter model to a Chat-Completions-native one "
-                    + "(e.g. openai/gpt-4o-mini or openai/gpt-4o) in the Config tab. "
+            return TurnResult.error("Puter rejected the tool-call format (HTTP 400) for this model. "
+                    + "Try a different Puter model in the Config tab (e.g. gpt-5.4-nano or gpt-5.3-chat). "
                     + "Details: " + apiMsg, r.status);
         }
         if (r.status == 429) {
@@ -256,11 +260,23 @@ public final class OpenAiCompatibleProvider implements AiProvider {
     }
 
     private List<ToolDef> toTools(List<ToolSpec> specs) {
+        if (specs == null || specs.isEmpty()) {
+            return null;
+        }
         List<ToolDef> tools = new ArrayList<>();
         for (ToolSpec s : specs) {
             tools.add(new ToolDef(new FunctionDef(s.name, s.description, s.parameters)));
         }
         return tools;
+    }
+
+    private static boolean isOpenAiModel(String model) {
+        if (model == null) {
+            return false;
+        }
+        String m = model.toLowerCase();
+        return m.contains("gpt") || m.contains("openai") || m.contains("codex")
+                || m.contains("o1") || m.contains("o3") || m.contains("oss");
     }
 
     private JsonObject parseArgs(String arguments) {

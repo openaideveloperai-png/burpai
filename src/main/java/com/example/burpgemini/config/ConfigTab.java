@@ -47,6 +47,7 @@ public final class ConfigTab extends JPanel {
     // Puter
     private final JPasswordField puterTokenField = new JPasswordField(36);
     private final JComboBox<String> puterModelBox = new JComboBox<>(OpenAiCompatibleProvider.MODELS);
+    private final JCheckBox puterWebSearch = new JCheckBox("Enable web search (OpenAI models — real-time info)");
 
     // Safety
     private final JCheckBox autoApprove = new JCheckBox(
@@ -55,6 +56,11 @@ public final class ConfigTab extends JPanel {
     private final JCheckBox respectScope = new JCheckBox("Respect Burp scope (block out-of-scope target traffic)");
     private final JCheckBox allowOutOfScope = new JCheckBox("Allow out-of-scope with explicit confirmation");
     private final JCheckBox persistTranscripts = new JCheckBox("Persist chat transcripts (never includes secrets)");
+
+    // Background passive recon
+    private final JCheckBox passiveScan = new JCheckBox("Background passive scan (local heuristics on proxied responses)");
+    private final JCheckBox passiveInScope = new JCheckBox("Passive scan in-scope traffic only");
+    private final JCheckBox aiEnrich = new JCheckBox("AI-enrich new endpoints (uses tokens; throttled, opt-in)");
     private final JLabel statusLabel = new JLabel(" ");
 
     // Field group labels, so we can grey out the inactive provider's section.
@@ -186,6 +192,12 @@ public final class ConfigTab extends JPanel {
         c.fill = GridBagConstraints.NONE;
         row++;
 
+        c.gridx = 1;
+        c.gridy = row;
+        puterWebSearch.setAlignmentX(Component.LEFT_ALIGNMENT);
+        form.add(puterWebSearch, c);
+        row++;
+
         // ---- Safety ----
         c.gridx = 0;
         c.gridy = row;
@@ -208,6 +220,19 @@ public final class ConfigTab extends JPanel {
         form.add(allowOutOfScope, c);
         c.gridy = row++;
         form.add(persistTranscripts, c);
+
+        // ---- Background passive recon ----
+        passiveScan.setAlignmentX(Component.LEFT_ALIGNMENT);
+        passiveInScope.setAlignmentX(Component.LEFT_ALIGNMENT);
+        aiEnrich.setAlignmentX(Component.LEFT_ALIGNMENT);
+        c.gridy = row++;
+        form.add(sectionLabel("Background passive recon"), c);
+        c.gridy = row++;
+        form.add(passiveScan, c);
+        c.gridy = row++;
+        form.add(passiveInScope, c);
+        c.gridy = row++;
+        form.add(aiEnrich, c);
 
         return form;
     }
@@ -248,11 +273,15 @@ public final class ConfigTab extends JPanel {
         modelBox.setSelectedItem(settings.getModel());
         thinkingBox.setSelectedItem(settings.getThinkingLevel());
         puterModelBox.setSelectedItem(settings.getPuterModel());
+        puterWebSearch.setSelected(settings.isPuterWebSearch());
         autoApprove.setSelected(settings.isAutoApprove());
         requireConfirm.setSelected(settings.isRequireConfirmActive());
         respectScope.setSelected(settings.isRespectScope());
         allowOutOfScope.setSelected(settings.isAllowOutOfScope());
         persistTranscripts.setSelected(settings.isPersistTranscripts());
+        passiveScan.setSelected(settings.isPassiveScanEnabled());
+        passiveInScope.setSelected(settings.isPassiveInScopeOnly());
+        aiEnrich.setSelected(settings.isAiEnrichEnabled());
     }
 
     private void persist() {
@@ -280,11 +309,15 @@ public final class ConfigTab extends JPanel {
         if (pm != null && !pm.toString().isBlank()) {
             settings.setPuterModel(pm.toString().trim());
         }
+        settings.setPuterWebSearch(puterWebSearch.isSelected());
         settings.setAutoApprove(autoApprove.isSelected());
         settings.setRequireConfirmActive(requireConfirm.isSelected());
         settings.setRespectScope(respectScope.isSelected());
         settings.setAllowOutOfScope(allowOutOfScope.isSelected());
         settings.setPersistTranscripts(persistTranscripts.isSelected());
+        settings.setPassiveScanEnabled(passiveScan.isSelected());
+        settings.setPassiveInScopeOnly(passiveInScope.isSelected());
+        settings.setAiEnrichEnabled(aiEnrich.isSelected());
         ctx.logInfo("Settings saved (provider=" + settings.getProvider()
                 + ", geminiModel=" + settings.getModel()
                 + ", puterModel=" + settings.getPuterModel()

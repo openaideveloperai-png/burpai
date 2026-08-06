@@ -39,6 +39,13 @@ Both providers are called directly with **your own key/token** — it does **not
 - **⚡ Agent mode (auto‑approve)** — optional hands‑off mode that auto‑approves every action so the
   assistant runs end‑to‑end. Scope still blocks out‑of‑scope traffic; a loud banner shows while it's
   on, and every action is still logged as a tool card.
+- **Background passive recon ("AI Recon" tab)** — a read‑only passive scanner runs local heuristic
+  checks on every in‑scope proxied response and collects an endpoint inventory plus deduplicated
+  findings (missing security headers, insecure cookies, CORS misconfig, JWT/secret exposure, verbose
+  errors, reflected params, …). The chat AI reads it via `get_passive_findings`. Optional, throttled
+  **AI enrichment** can add a deeper pass on new endpoints.
+- **Web search (Puter)** — Puter's built‑in `web_search` tool is enabled for OpenAI models, so the
+  assistant can pull real‑time info into its analysis.
 - **Scope enforcement** — out‑of‑scope target traffic is blocked by default; overriding requires an
   explicit setting *and* a per‑action checkbox.
 - **No arbitrary shell/OS tool** — the model can only affect a target through the mediated HTTP/Burp
@@ -77,7 +84,8 @@ bundled.
 1. **Extensions → Installed → Add.**
 2. **Extension type:** Java.
 3. Select `build/libs/burp-gemini-assistant.jar`.
-4. Two tabs appear: **AI Assistant** (chat) and **AI Assistant Config** (settings).
+4. Three tabs appear: **AI Assistant** (chat), **AI Recon** (live passive findings + endpoint
+   inventory), and **AI Assistant Config** (settings).
 
 ---
 
@@ -94,22 +102,23 @@ exact error).
 
 ### Option B — Puter AI (OpenAI‑compatible)
 1. Sign in at **https://puter.com/dashboard**, open the **API tokens** section, click **Create token**.
-2. Paste it into **Puter auth token**, choose a **Puter model** (default `openai/gpt-4o-mini`; the
-   field is editable), **Save**.
+2. Paste it into **Puter auth token**, choose a **Puter model** (default `gpt-5.3-chat`; also
+   `gpt-5.4-nano`, `gpt-5.4`, `gpt-5.6-luna/terra/sol`, `gpt-5.3-codex`, `openai/gpt-oss-120b`, … —
+   the field is editable), leave **Enable web search** on if you like, **Save**.
 3. Or set the `PUTER_AUTH_TOKEN` environment variable and leave the field blank.
 
 Puter exposes an **OpenAI‑compatible** Chat Completions endpoint
 (`https://api.puter.com/puterai/openai/v1/chat/completions`), so tool/function calling works through
-the standard OpenAI convention. Switching providers starts a fresh chat session (the two wire formats
-aren't interchangeable mid‑conversation).
+the standard OpenAI convention. **Web search:** for OpenAI models, the extension adds Puter's built‑in
+`{ "type": "web_search" }` tool so the model can fetch up‑to‑date info (toggle in Config). Switching
+providers starts a fresh chat session (the two wire formats aren't interchangeable mid‑conversation).
 
-> **Puter and tool calling.** Puter proxies many models through the OpenAI‑*Responses* bridge, whose
-> `call_id` linkage breaks when structured tool history is resent
+> **Puter and multi‑turn tool calling.** Puter proxies many models through the OpenAI‑*Responses*
+> bridge, whose `call_id` linkage breaks when structured tool history is resent
 > (`No tool call found for … call_id …`). To stay robust across **all** Puter models (including
-> reasoning models), this extension represents *prior* tool exchanges as plain text while still
-> advertising the tools each turn, so the model keeps calling them. A Chat‑Completions‑native model
-> (`openai/gpt-4o-mini`, `openai/gpt-4o`, `claude-sonnet-4-latest`) still gives the crispest tool
-> use. Gemini (Option A) uses native structured tool calling.
+> reasoning models like the GPT‑5.6 family), this extension represents *prior* tool exchanges as
+> plain text while still advertising the tools each turn, so the model keeps calling them. Gemini
+> (Option A) uses native structured tool calling.
 
 > **Secrets note:** saved keys/tokens live in Burp's preferences, which are **not strongly encrypted
 > at rest**. They are never logged and never written into chat transcripts. Prefer the environment
@@ -123,8 +132,12 @@ aren't interchangeable mid‑conversation).
 | Gemini model | `gemini-3.1-pro-preview-customtools` | Model used when the provider is Gemini. |
 | Thinking level | High | Reasoning depth (`thinkingConfig.thinkingBudget`: High = dynamic, Low = minimal). |
 | Puter auth token | — | Bearer token for Puter's OpenAI‑compatible endpoint. |
-| Puter model | `openai/gpt-4o-mini` | Model used when the provider is Puter (editable). |
+| Puter model | `gpt-5.3-chat` | Model used when the provider is Puter (editable). |
+| Puter web search | **ON** | Adds Puter's built‑in `web_search` tool for OpenAI models. |
 | ⚡ Agent mode (auto‑approve) | **OFF** | Auto‑approves **every** action with no dialog, so the assistant runs end‑to‑end on its own. Scope still applies (out‑of‑scope stays blocked unless you also enable the override). A loud red banner shows while it's on. |
+| Background passive scan | **ON** | Local heuristic checks on proxied responses → the AI Recon tab + `get_passive_findings`. |
+| Passive scan in‑scope only | **ON** | Restrict passive scanning to in‑scope traffic. |
+| AI‑enrich new endpoints | **OFF** | Optional throttled AI pass over newly‑seen endpoints (uses tokens). |
 | Require confirmation before active actions | **ON** | Governs Tier 1–2. Tier 3 always confirms regardless. |
 | Respect Burp scope | **ON** | Blocks out‑of‑scope target traffic. |
 | Allow out‑of‑scope with explicit confirmation | **OFF** | If ON, out‑of‑scope actions can proceed only after ticking a red per‑action checkbox. |
@@ -158,13 +171,20 @@ When a safety toggle is relaxed, a persistent warning banner appears at the top 
    visible audit trail. The same events are logged to the extension's Output tab.
 6. Use **Cancel** to abort an in‑flight turn, or **Clear chat** to start a new session.
 
+### Background passive recon
+While you browse the target through Burp, the **AI Recon** tab fills up on its own: the passive
+scanner runs read‑only local checks on every in‑scope response and collects an endpoint inventory
+plus deduplicated findings. Click **Analyze in chat** there to have the assistant call
+`get_passive_findings`, prioritise the results, and suggest next steps. It sends no traffic — it only
+reads what already flows through the proxy. Toggle it (and optional AI enrichment) in the Config tab.
+
 ---
 
 ## Tool catalog & risk tiers
 
 | Tool | Tier | Notes |
 |---|---|---|
-| `list_proxy_history`, `get_request_response`, `get_site_map`, `get_selected_items`, `search_traffic`, `get_scope`, `decode_transform` | **0 — auto** | Read‑only / local. No dialog. |
+| `list_proxy_history`, `get_request_response`, `get_site_map`, `get_selected_items`, `search_traffic`, `get_scope`, `get_passive_findings`, `decode_transform` | **0 — auto** | Read‑only / local. No dialog. `get_passive_findings` returns the background scanner's collected recon. |
 | `send_to_repeater`, `add_to_scope`, `remove_from_scope`, `send_to_intruder` | **1 — confirm** | Stage in a Burp tool / edit scope. No new target traffic. Intruder is staged (Burp's API can't auto‑start an attack); set payloads and start it manually. |
 | `send_http_request`, `start_passive_audit` | **2 — confirm + warning** | Sends one request / runs passive checks. Card shows a request **diff**. |
 | `start_active_audit`, `run_request_sequence` | **3 — confirm + strong warning** | Active scan / a series of crafted requests. Card shows the count and a sample; **always** confirmed. |
@@ -195,6 +215,9 @@ Key files:
 - `ai/GeminiProvider` — Gemini `generateContent`; preserves each `thoughtSignature` so tool calls work.
 - `ai/OpenAiCompatibleProvider` — Puter's OpenAI‑compatible endpoint (tools / tool_calls).
 - `ai/HttpTransport` — shared cancellable POST with retries/backoff (429/5xx/network).
+- `recon/PassiveScanner` — Proxy response handler running local heuristic checks (read‑only);
+  `recon/FindingsStore` holds the deduplicated findings + endpoint inventory; `recon/ReconTab` is the
+  live view; `recon/AiEnricher` is the optional throttled AI pass.
 - `tools/ToolRegistry` — the neutral tool specs (name + description + JSON‑Schema params).
 - `tools/ToolExecutor` — maps tool calls to Montoya operations; token‑efficient JSON results.
 - `tools/RiskTier` — tier enum + tool→tier policy (fails safe).

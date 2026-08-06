@@ -14,6 +14,8 @@ import burp.api.montoya.scanner.AuditConfiguration;
 import burp.api.montoya.scanner.BuiltInAuditConfiguration;
 import burp.api.montoya.scanner.audit.Audit;
 import burp.api.montoya.scanner.audit.issues.AuditIssue;
+import com.example.burpgemini.recon.FindingsStore;
+import com.example.burpgemini.recon.PassiveFinding;
 import com.example.burpgemini.util.BurpContext;
 import com.example.burpgemini.util.TextDiff;
 import com.google.gson.JsonArray;
@@ -42,10 +44,12 @@ public final class ToolExecutor {
 
     private final BurpContext ctx;
     private final MontoyaApi api;
+    private final FindingsStore findings;
 
-    public ToolExecutor(BurpContext ctx) {
+    public ToolExecutor(BurpContext ctx, FindingsStore findings) {
         this.ctx = ctx;
         this.api = ctx.api();
+        this.findings = findings;
     }
 
     /** A resolved captured item, normalised across proxy/sitemap/selection sources. */
@@ -72,6 +76,8 @@ public final class ToolExecutor {
                     return searchTraffic(args);
                 case "get_scope":
                     return getScope();
+                case "get_passive_findings":
+                    return getPassiveFindings(args);
                 case "decode_transform":
                     return decodeTransform(args);
                 case "send_to_repeater":
@@ -332,6 +338,95 @@ public final class ToolExecutor {
         r.addProperty("note", "Burp's API cannot enumerate scope rules; these are isInScope() checks "
                 + "for hosts seen in traffic.");
         return r;
+    }
+
+    private JsonObject getPassiveFindings(JsonObject args) {
+        String minSev = getStr(args, "min_severity", "Info");
+        String hostContains = getStr(args, "host_contains", null);
+        int limit = getInt(args, "limit", 100);
+        int minRank = severityRank(minSev);
+
+        JsonArray f = new JsonArray();
+        int shown = 0;
+        for (PassiveFinding pf : findings.findingsSnapshot()) {
+            if (pf.severityRank() < minRank) {
+                continue;
+            }
+            if (hostContains != null && (pf.url == null || !pf.url.contains(hostContains))) {
+                continue;
+            }
+            if (shown >= limit) {
+                break;
+            }
+            JsonObject o = new JsonObject();
+            o.addProperty("severity", pf.severity);
+            o.addProperty("confidence", pf.confidence);
+            o.addProperty("type", pf.type);
+            o.addProperty("url", pf.url);
+            o.addProperty("evidence", pf.evidence);
+            o.addProperty("source", pf.ai ? "ai" : "heuristic");
+            f.add(o);
+            shown++;
+        }
+
+        JsonArray eps = new JsonArray();
+        int epCount = 0;
+        for (FindingsStore.EndpointInfo e : findings.endpointsSnapshot()) {
+            if (hostContains != null && (e.sampleUrl == null || !e.sampleUrl.contains(hostContains))) {
+                continue;
+            }
+            if (epCount >= 200) {
+                break;
+            }
+            JsonObject o = new JsonObject();
+            o.addProperty("url", e.sampleUrl);
+            o.add("methods", toStrArray(e.methods));
+            o.add("statuses", toIntArray(e.statuses));
+            o.addProperty("hits", e.hits.get());
+            eps.add(o);
+            epCount++;
+        }
+
+        JsonObject r = new JsonObject();
+        r.addProperty("finding_count", findings.findingCount());
+        r.addProperty("endpoint_count", findings.endpointCount());
+        r.add("findings", f);
+        r.add("endpoints", eps);
+        if (findings.findingCount() == 0 && findings.endpointCount() == 0) {
+            r.addProperty("note", "Nothing collected yet. The passive scanner records in-scope proxy "
+                    + "traffic — browse the target through Burp, or check that passive scanning is "
+                    + "enabled and the target is in scope.");
+        }
+        return r;
+    }
+
+    private static int severityRank(String sev) {
+        switch (sev == null ? "" : sev) {
+            case "High":
+                return 4;
+            case "Medium":
+                return 3;
+            case "Low":
+                return 2;
+            default:
+                return 1;
+        }
+    }
+
+    private static JsonArray toStrArray(java.util.Collection<String> c) {
+        JsonArray a = new JsonArray();
+        for (String s : c) {
+            a.add(s);
+        }
+        return a;
+    }
+
+    private static JsonArray toIntArray(java.util.Collection<Integer> c) {
+        JsonArray a = new JsonArray();
+        for (Integer i : c) {
+            a.add(i);
+        }
+        return a;
     }
 
     private JsonObject decodeTransform(JsonObject args) {

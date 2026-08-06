@@ -21,14 +21,18 @@ public final class Settings {
     private static final String K_ALLOW_OOS = "burpgemini.allowOutOfScope";
     private static final String K_PERSIST_TRANSCRIPTS = "burpgemini.persistTranscripts";
     private static final String K_AUTO_APPROVE = "burpgemini.autoApprove";
+    private static final String K_PASSIVE_SCAN = "burpgemini.passiveScan";
+    private static final String K_PASSIVE_IN_SCOPE = "burpgemini.passiveInScopeOnly";
+    private static final String K_AI_ENRICH = "burpgemini.aiEnrich";
     private static final String K_PROVIDER = "burpgemini.provider";
     private static final String K_PUTER_TOKEN = "burpgemini.puterToken";
     private static final String K_PUTER_MODEL = "burpgemini.puterModel";
+    private static final String K_PUTER_WEBSEARCH = "burpgemini.puterWebSearch";
 
     /** AI provider ids. */
     public static final String PROVIDER_GEMINI = "gemini";
     public static final String PROVIDER_PUTER = "puter";
-    public static final String DEFAULT_PUTER_MODEL = "openai/gpt-4o-mini";
+    public static final String DEFAULT_PUTER_MODEL = "gpt-5.3-chat";
 
     /** Models offered in the Config dropdown. First entry is the default. */
     public static final String[] MODELS = {
@@ -140,6 +144,15 @@ public final class Settings {
         prefs.setString(K_PUTER_MODEL, model);
     }
 
+    /** Enable Puter's built-in web_search tool for OpenAI models. Default ON. */
+    public boolean isPuterWebSearch() {
+        return boolOrDefault(K_PUTER_WEBSEARCH, true);
+    }
+
+    public void setPuterWebSearch(boolean v) {
+        prefs.setBoolean(K_PUTER_WEBSEARCH, v);
+    }
+
     // ---- model & thinking level -------------------------------------------
 
     public String getModel() {
@@ -205,6 +218,33 @@ public final class Settings {
 
     public void setAutoApprove(boolean v) {
         prefs.setBoolean(K_AUTO_APPROVE, v);
+    }
+
+    /** Background passive scanner: run local heuristic checks on proxied responses. Default ON. */
+    public boolean isPassiveScanEnabled() {
+        return boolOrDefault(K_PASSIVE_SCAN, true);
+    }
+
+    public void setPassiveScanEnabled(boolean v) {
+        prefs.setBoolean(K_PASSIVE_SCAN, v);
+    }
+
+    /** Only passively scan in-scope traffic. Default ON. */
+    public boolean isPassiveInScopeOnly() {
+        return boolOrDefault(K_PASSIVE_IN_SCOPE, true);
+    }
+
+    public void setPassiveInScopeOnly(boolean v) {
+        prefs.setBoolean(K_PASSIVE_IN_SCOPE, v);
+    }
+
+    /** Enrich newly-seen endpoints with an AI pass (uses tokens). Default OFF. */
+    public boolean isAiEnrichEnabled() {
+        return boolOrDefault(K_AI_ENRICH, false);
+    }
+
+    public void setAiEnrichEnabled(boolean v) {
+        prefs.setBoolean(K_AI_ENRICH, v);
     }
 
     private boolean boolOrDefault(String key, boolean def) {

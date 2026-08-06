@@ -65,6 +65,17 @@ public final class ToolRegistry {
                 "Report Burp scope status for the hosts seen in captured traffic (isInScope checks). Read-only.",
                 obj(props(), req())));
 
+        d.add(new ToolSpec("get_passive_findings",
+                "Return recon collected in the background by the passive scanner: the endpoint "
+                        + "inventory and deduplicated passive findings (missing headers, sensitive data, "
+                        + "CORS/cookie issues, verbose errors, etc.). Read-only.",
+                obj(props(
+                        p("min_severity", enumType("Only findings at or above this severity (default Info).",
+                                "Info", "Low", "Medium", "High")),
+                        p("host_contains", strType("Only findings/endpoints whose URL contains this substring.")),
+                        p("limit", intType("Max findings to return (default 100)."))
+                ), req())));
+
         d.add(new ToolSpec("decode_transform",
                 "Locally decode/encode a string (no target traffic). JWT decode is non-verifying, header/payload only.",
                 obj(props(

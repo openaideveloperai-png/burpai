@@ -39,10 +39,16 @@ final class OpenAiModels {
 
     static final class ToolDef {
         String type = "function";
-        FunctionDef function;
+        FunctionDef function; // null for built-in/hosted tools like web_search
 
         ToolDef(FunctionDef function) {
             this.function = function;
+        }
+
+        /** A built-in/hosted tool such as {@code web_search} (no function schema). */
+        ToolDef(String type) {
+            this.type = type;
+            this.function = null;
         }
     }
 

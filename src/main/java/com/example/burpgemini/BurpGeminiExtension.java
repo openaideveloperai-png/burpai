@@ -13,6 +13,10 @@ import com.example.burpgemini.chat.ChatController;
 import com.example.burpgemini.chat.ChatTab;
 import com.example.burpgemini.config.ConfigTab;
 import com.example.burpgemini.config.Settings;
+import com.example.burpgemini.recon.AiEnricher;
+import com.example.burpgemini.recon.FindingsStore;
+import com.example.burpgemini.recon.PassiveScanner;
+import com.example.burpgemini.recon.ReconTab;
 import com.example.burpgemini.safety.ConfirmationManager;
 import com.example.burpgemini.safety.ScopeGuard;
 import com.example.burpgemini.tools.ToolExecutor;
@@ -46,9 +50,18 @@ public final class BurpGeminiExtension implements BurpExtension {
         this.ctx = new BurpContext(api, settings);
 
         ToolRegistry registry = new ToolRegistry();
-        ToolExecutor executor = new ToolExecutor(ctx);
+
+        // Background passive recon.
+        FindingsStore findings = new FindingsStore();
+        ToolExecutor executor = new ToolExecutor(ctx, findings);
         ScopeGuard scopeGuard = new ScopeGuard(api, settings);
         ConfirmationManager confirmations = new ConfirmationManager(settings);
+
+        PassiveScanner scanner = new PassiveScanner(ctx, findings);
+        AiEnricher enricher = new AiEnricher(ctx, findings);
+        scanner.setEnricher(enricher);
+        enricher.start();
+        api.proxy().registerResponseHandler(scanner);
 
         // AI providers (switchable). First entry is the default.
         List<AiProvider> providers = List.of(
@@ -61,11 +74,15 @@ public final class BurpGeminiExtension implements BurpExtension {
                 ctx, settings, providers, executor, confirmations, scopeGuard, registry, chatTab);
         chatTab.setController(controller);
 
+        ReconTab reconTab = new ReconTab(findings);
+        reconTab.setController(controller);
+
         ConfigTab configTab = new ConfigTab(ctx, settings, providers);
         configTab.setChatTab(chatTab);
 
         // Register suite tabs.
         api.userInterface().registerSuiteTab("AI Assistant", chatTab);
+        api.userInterface().registerSuiteTab("AI Recon", reconTab);
         api.userInterface().registerSuiteTab("AI Assistant Config", configTab);
 
         // "Send to AI Assistant" context menu across Proxy/Repeater/Target/Intruder/browser.
@@ -75,6 +92,7 @@ public final class BurpGeminiExtension implements BurpExtension {
         api.extension().registerUnloadingHandler(() -> {
             try {
                 controller.cancelCurrentTurn();
+                enricher.stop();
             } finally {
                 ctx.shutdown();
             }

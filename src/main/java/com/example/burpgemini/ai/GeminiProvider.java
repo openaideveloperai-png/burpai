@@ -244,6 +244,9 @@ public final class GeminiProvider implements AiProvider {
     }
 
     private List<Tool> toTools(List<ToolSpec> specs) {
+        if (specs == null || specs.isEmpty()) {
+            return null; // omit `tools` entirely (Gemini rejects an empty functionDeclarations array)
+        }
         Tool tool = new Tool();
         for (ToolSpec s : specs) {
             tool.functionDeclarations.add(new FunctionDeclaration(s.name, s.description, s.parameters));
