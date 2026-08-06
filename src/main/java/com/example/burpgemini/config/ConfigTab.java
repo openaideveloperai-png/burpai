@@ -49,6 +49,8 @@ public final class ConfigTab extends JPanel {
     private final JComboBox<String> puterModelBox = new JComboBox<>(OpenAiCompatibleProvider.MODELS);
 
     // Safety
+    private final JCheckBox autoApprove = new JCheckBox(
+            "⚡ Agent mode: auto-approve ALL actions (no confirmation; scope still applies)");
     private final JCheckBox requireConfirm = new JCheckBox("Require confirmation before active actions (Tier 1–2)");
     private final JCheckBox respectScope = new JCheckBox("Respect Burp scope (block out-of-scope target traffic)");
     private final JCheckBox allowOutOfScope = new JCheckBox("Allow out-of-scope with explicit confirmation");
@@ -190,10 +192,14 @@ public final class ConfigTab extends JPanel {
         c.gridwidth = 2;
         form.add(sectionLabel("Safety"), c);
         row++;
+        autoApprove.setAlignmentX(Component.LEFT_ALIGNMENT);
+        autoApprove.setForeground(new Color(0xC62828));
         requireConfirm.setAlignmentX(Component.LEFT_ALIGNMENT);
         respectScope.setAlignmentX(Component.LEFT_ALIGNMENT);
         allowOutOfScope.setAlignmentX(Component.LEFT_ALIGNMENT);
         persistTranscripts.setAlignmentX(Component.LEFT_ALIGNMENT);
+        c.gridy = row++;
+        form.add(autoApprove, c);
         c.gridy = row++;
         form.add(requireConfirm, c);
         c.gridy = row++;
@@ -242,6 +248,7 @@ public final class ConfigTab extends JPanel {
         modelBox.setSelectedItem(settings.getModel());
         thinkingBox.setSelectedItem(settings.getThinkingLevel());
         puterModelBox.setSelectedItem(settings.getPuterModel());
+        autoApprove.setSelected(settings.isAutoApprove());
         requireConfirm.setSelected(settings.isRequireConfirmActive());
         respectScope.setSelected(settings.isRespectScope());
         allowOutOfScope.setSelected(settings.isAllowOutOfScope());
@@ -273,6 +280,7 @@ public final class ConfigTab extends JPanel {
         if (pm != null && !pm.toString().isBlank()) {
             settings.setPuterModel(pm.toString().trim());
         }
+        settings.setAutoApprove(autoApprove.isSelected());
         settings.setRequireConfirmActive(requireConfirm.isSelected());
         settings.setRespectScope(respectScope.isSelected());
         settings.setAllowOutOfScope(allowOutOfScope.isSelected());

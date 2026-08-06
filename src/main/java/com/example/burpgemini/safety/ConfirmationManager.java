@@ -16,6 +16,10 @@ public final class ConfirmationManager {
     /** UI that renders a confirmation card and completes the future when the operator decides. */
     public interface ConfirmationView {
         CompletableFuture<Decision> show(ActionRequest request);
+
+        /** Render the action details on the card without asking (auto-approved path). */
+        default void showAutoApproved(ActionRequest request, String reason) {
+        }
     }
 
     /** The operator's decision on a confirmation card. */
@@ -57,9 +61,18 @@ public final class ConfirmationManager {
      * </ul>
      */
     public CompletableFuture<Decision> request(ActionRequest req, ConfirmationView view) {
+        // Scope is the one gate agent mode never bypasses: out-of-scope stays blocked.
         if (req.scope.blocked) {
             return CompletableFuture.completedFuture(
                     Decision.deny("Blocked: target is out of Burp scope and out-of-scope override is disabled."));
+        }
+
+        // Agent mode: auto-approve everything that isn't scope-blocked (including Tier 3 and an
+        // out-of-scope override the operator explicitly enabled). No dialog.
+        if (settings.isAutoApprove()) {
+            view.showAutoApproved(req, "Agent mode");
+            return CompletableFuture.completedFuture(
+                    new Decision(true, null, req.scope.requiresOverride));
         }
 
         boolean mustConfirm = req.tier.alwaysConfirm()
@@ -68,6 +81,7 @@ public final class ConfirmationManager {
 
         if (!mustConfirm) {
             // Tier 1–2 with confirmation toggle off, and the target is in scope.
+            view.showAutoApproved(req, "confirmation off");
             return CompletableFuture.completedFuture(Decision.approve());
         }
         return view.show(req);

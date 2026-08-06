@@ -8,7 +8,6 @@ import com.example.burpgemini.ai.Neutral.TurnResult;
 import com.example.burpgemini.ai.OpenAiModels.ChatRequest;
 import com.example.burpgemini.ai.OpenAiModels.ChatResponse;
 import com.example.burpgemini.ai.OpenAiModels.Choice;
-import com.example.burpgemini.ai.OpenAiModels.FunctionCall;
 import com.example.burpgemini.ai.OpenAiModels.FunctionDef;
 import com.example.burpgemini.ai.OpenAiModels.Message;
 import com.example.burpgemini.ai.OpenAiModels.ToolCall;
@@ -194,53 +193,59 @@ public final class OpenAiCompatibleProvider implements AiProvider {
 
     // ---- neutral -> OpenAI wire --------------------------------------------
 
+    /**
+     * Build the OpenAI messages array.
+     *
+     * <p><b>Prior</b> tool exchanges are represented as plain text (not structured
+     * {@code tool_calls} / {@code role:"tool"} messages). Puter proxies many models through the
+     * OpenAI <em>Responses</em> API, whose bridge mangles the {@code call_id} linkage on resent
+     * turns ("No tool call found for function call output with call_id …"). Flattening the history
+     * avoids that entirely, while we still advertise {@code tools} in the request so the model can
+     * make <em>new</em> tool calls each turn (those are parsed fresh from the response, which is
+     * always fine). This keeps multi-turn agent behaviour working across all Puter models, including
+     * reasoning models.
+     */
     private List<Message> toMessages(String systemPrompt, List<ChatMessage> history) {
         List<Message> messages = new ArrayList<>();
         messages.add(Message.of("system", systemPrompt));
 
-        int autoId = 0;
         for (ChatMessage m : history) {
             switch (m.role) {
                 case USER:
                     messages.add(Message.of("user", m.text == null ? "" : m.text));
                     break;
                 case MODEL: {
-                    Message asst = new Message();
-                    asst.role = "assistant";
-                    boolean hasCalls = m.toolCalls != null && !m.toolCalls.isEmpty();
-                    // Canonical OpenAI: a pure tool-call turn omits `content` (null). Sending "" can
-                    // make Puter's Responses-API bridge emit a stray text item and break the
-                    // tool_call -> tool_result call_id linkage ("No tool call found for ...").
+                    StringBuilder sb = new StringBuilder();
                     if (m.text != null && !m.text.isEmpty()) {
-                        asst.content = m.text;
-                    } else if (!hasCalls) {
-                        asst.content = "";
+                        sb.append(m.text);
                     }
-                    if (hasCalls) {
-                        asst.tool_calls = new ArrayList<>();
-                        for (ToolCallRequest tc : m.toolCalls) {
-                            ToolCall out = new ToolCall();
-                            out.id = tc.id != null ? tc.id : ("call_" + (autoId++));
-                            FunctionCall fn = new FunctionCall();
-                            fn.name = tc.name;
-                            fn.arguments = tc.args == null ? "{}" : gson.toJson(tc.args);
-                            out.function = fn;
-                            asst.tool_calls.add(out);
+                    if (m.toolCalls != null && !m.toolCalls.isEmpty()) {
+                        if (sb.length() > 0) {
+                            sb.append('\n');
                         }
+                        sb.append("[Called tools: ");
+                        for (int i = 0; i < m.toolCalls.size(); i++) {
+                            ToolCallRequest tc = m.toolCalls.get(i);
+                            if (i > 0) {
+                                sb.append("; ");
+                            }
+                            sb.append(tc.name).append('(')
+                              .append(tc.args == null ? "{}" : gson.toJson(tc.args)).append(')');
+                        }
+                        sb.append(']');
                     }
-                    messages.add(asst);
+                    messages.add(Message.of("assistant", sb.length() == 0 ? "(thinking)" : sb.toString()));
                     break;
                 }
                 case TOOL: {
+                    StringBuilder sb = new StringBuilder("[Tool results]");
                     if (m.toolResults != null) {
                         for (ToolResult tr : m.toolResults) {
-                            Message tool = new Message();
-                            tool.role = "tool";
-                            tool.tool_call_id = tr.id != null ? tr.id : ("call_" + (autoId++));
-                            tool.content = tr.response == null ? "{}" : gson.toJson(tr.response);
-                            messages.add(tool);
+                            sb.append('\n').append(tr.name).append(": ")
+                              .append(tr.response == null ? "{}" : gson.toJson(tr.response));
                         }
                     }
+                    messages.add(Message.of("user", sb.toString()));
                     break;
                 }
                 default:

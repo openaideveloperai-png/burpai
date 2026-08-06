@@ -20,6 +20,7 @@ public final class Settings {
     private static final String K_RESPECT_SCOPE = "burpgemini.respectScope";
     private static final String K_ALLOW_OOS = "burpgemini.allowOutOfScope";
     private static final String K_PERSIST_TRANSCRIPTS = "burpgemini.persistTranscripts";
+    private static final String K_AUTO_APPROVE = "burpgemini.autoApprove";
     private static final String K_PROVIDER = "burpgemini.provider";
     private static final String K_PUTER_TOKEN = "burpgemini.puterToken";
     private static final String K_PUTER_MODEL = "burpgemini.puterModel";
@@ -191,6 +192,19 @@ public final class Settings {
 
     public void setPersistTranscripts(boolean v) {
         prefs.setBoolean(K_PERSIST_TRANSCRIPTS, v);
+    }
+
+    /**
+     * Agent mode: auto-approve every action the model requests, with no confirmation dialog.
+     * Scope still applies — out-of-scope targets remain blocked unless "Allow out-of-scope" is on.
+     * Default OFF; this removes the human-in-the-loop gate, so a loud banner is shown when it's ON.
+     */
+    public boolean isAutoApprove() {
+        return boolOrDefault(K_AUTO_APPROVE, false);
+    }
+
+    public void setAutoApprove(boolean v) {
+        prefs.setBoolean(K_AUTO_APPROVE, v);
     }
 
     private boolean boolOrDefault(String key, boolean def) {

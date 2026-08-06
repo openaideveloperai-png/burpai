@@ -29,12 +29,16 @@ Both providers are called directly with **your own key/token** — it does **not
   finding.
 - **Right‑click → "Send to AI Assistant"** in Proxy, Repeater, Target, Intruder, and the embedded
   browser — attaches the selected request(s) as context.
-- **Function‑calling agent loop** — the model can call a fixed catalog of tools; every call is risk‑
-  tiered and mediated.
+- **Proactive agent loop** — the model actively drives Burp: recon (history/site map/search),
+  passive audits, fetching live responses via `send_http_request`, and crafting the smallest safe
+  active test to confirm an issue. **Quick‑action** buttons kick off common tasks in one click.
 - **Risk tiering + confirmation cards** — Tier 0 (read‑only) runs automatically; Tier 1–3 render an
   Approve/Deny card showing the target, scope status, a request **diff** (or request count/sample),
   the risk tier, and the model's rationale. Tier 3 is **always** confirmed, even if the global
   confirmation toggle is off.
+- **⚡ Agent mode (auto‑approve)** — optional hands‑off mode that auto‑approves every action so the
+  assistant runs end‑to‑end. Scope still blocks out‑of‑scope traffic; a loud banner shows while it's
+  on, and every action is still logged as a tool card.
 - **Scope enforcement** — out‑of‑scope target traffic is blocked by default; overriding requires an
   explicit setting *and* a per‑action checkbox.
 - **No arbitrary shell/OS tool** — the model can only affect a target through the mediated HTTP/Burp
@@ -99,11 +103,13 @@ Puter exposes an **OpenAI‑compatible** Chat Completions endpoint
 the standard OpenAI convention. Switching providers starts a fresh chat session (the two wire formats
 aren't interchangeable mid‑conversation).
 
-> **Puter model choice matters for tool calling.** This extension is tool‑heavy (multi‑turn function
-> calls). Prefer a **Chat‑Completions‑native** model — `openai/gpt-4o-mini`, `openai/gpt-4o`, or
-> `claude-sonnet-4-latest`. Some GPT‑5.x models route through Puter's OpenAI‑*Responses* bridge,
-> which can break the tool‑call/tool‑result linkage (`No tool call found for … call_id …`); if you
-> hit that, switch to a gpt‑4o model. Gemini (Option A) is unaffected.
+> **Puter and tool calling.** Puter proxies many models through the OpenAI‑*Responses* bridge, whose
+> `call_id` linkage breaks when structured tool history is resent
+> (`No tool call found for … call_id …`). To stay robust across **all** Puter models (including
+> reasoning models), this extension represents *prior* tool exchanges as plain text while still
+> advertising the tools each turn, so the model keeps calling them. A Chat‑Completions‑native model
+> (`openai/gpt-4o-mini`, `openai/gpt-4o`, `claude-sonnet-4-latest`) still gives the crispest tool
+> use. Gemini (Option A) uses native structured tool calling.
 
 > **Secrets note:** saved keys/tokens live in Burp's preferences, which are **not strongly encrypted
 > at rest**. They are never logged and never written into chat transcripts. Prefer the environment
@@ -117,7 +123,8 @@ aren't interchangeable mid‑conversation).
 | Gemini model | `gemini-3.1-pro-preview-customtools` | Model used when the provider is Gemini. |
 | Thinking level | High | Reasoning depth (`thinkingConfig.thinkingBudget`: High = dynamic, Low = minimal). |
 | Puter auth token | — | Bearer token for Puter's OpenAI‑compatible endpoint. |
-| Puter model | `openai/gpt-4o-mini` | Model used when the provider is Puter (editable). Prefer a Chat‑Completions‑native model for reliable tool calling. |
+| Puter model | `openai/gpt-4o-mini` | Model used when the provider is Puter (editable). |
+| ⚡ Agent mode (auto‑approve) | **OFF** | Auto‑approves **every** action with no dialog, so the assistant runs end‑to‑end on its own. Scope still applies (out‑of‑scope stays blocked unless you also enable the override). A loud red banner shows while it's on. |
 | Require confirmation before active actions | **ON** | Governs Tier 1–2. Tier 3 always confirms regardless. |
 | Respect Burp scope | **ON** | Blocks out‑of‑scope target traffic. |
 | Allow out‑of‑scope with explicit confirmation | **OFF** | If ON, out‑of‑scope actions can proceed only after ticking a red per‑action checkbox. |
@@ -134,13 +141,19 @@ When a safety toggle is relaxed, a persistent warning banner appears at the top 
    **Send to AI Assistant**. A *"context attached"* chip appears in the chat tab.
 3. Open the **AI Assistant** tab and ask, e.g.
    *"Check this login request for auth bypass"* or *"Is the `id` parameter vulnerable to IDOR?"*
-   Press **Send** (or Ctrl/Cmd+Enter).
-4. The assistant analyses the traffic and, when a quick check would settle a question, **requests a
-   tool**:
+   Press **Send** (or Ctrl/Cmd+Enter). Or use a **quick action** button —
+   **🔍 Passive recon**, **🎯 Analyze selection**, **🛡 Security headers** — to kick off a
+   canned agent task in one click.
+4. The assistant analyses the traffic and **proactively drives Burp** — it will call
+   `send_http_request` to fetch a live response (e.g. when a selected item has no response yet),
+   run `start_passive_audit` for recon, and craft the smallest safe active test to confirm an issue:
    - **Tier 0** (read history/site map/selection, search, decode) runs immediately.
-   - **Tier 1–3** show a confirmation card. Review the target, scope status, and the request diff or
+   - **Tier 1–3** show a confirmation card — review the target, scope status, and the request diff or
      count, then **Approve** or **Deny**. Denials (with an optional reason) are fed back to the model
      so it can adapt.
+   - With **⚡ Agent mode** on (Config tab), those actions are **auto‑approved** and the assistant
+     runs the whole investigation end‑to‑end. The tool cards still show every action as an audit
+     trail, and out‑of‑scope targets are still blocked.
 5. Results appear inline as **tool‑call cards** (Pending → Running → Result/Denied/Blocked), giving a
    visible audit trail. The same events are logged to the extension's Output tab.
 6. Use **Cancel** to abort an in‑flight turn, or **Clear chat** to start a new session.

@@ -139,20 +139,27 @@ final class ToolCard extends JPanel implements ConfirmationManager.ConfirmationV
         return future;
     }
 
-    private void buildConfirm(ActionRequest req, CompletableFuture<ConfirmationManager.Decision> future) {
-        confirmHolder.removeAll();
-        statusLabel.setText("Awaiting approval");
-        statusLabel.setForeground(new Color(0xE65100));
+    /** Auto-approved path: still render the action details as an audit trail, but no buttons. */
+    @Override
+    public void showAutoApproved(ActionRequest req, String reason) {
+        onEdt(() -> {
+            confirmHolder.removeAll();
+            statusLabel.setText("Auto-approved (" + reason + ")");
+            statusLabel.setForeground(new Color(0xE65100));
+            renderDetails(req);
+            revalidate();
+            repaint();
+        });
+    }
 
+    /** Render the shared action detail block into {@link #confirmHolder}. */
+    private void renderDetails(ActionRequest req) {
         confirmHolder.add(note(req.summary, MessageViewColors.foreground()));
-
-        // Targets + scope status.
         String targets = req.targetUrls.isEmpty() ? "(none)" : String.join("\n", req.targetUrls);
         confirmHolder.add(kv("Target(s)", targets));
         Color scopeColor = req.scope.blocked ? new Color(0xC62828)
                 : (req.scope.requiresOverride ? new Color(0xE65100) : new Color(0x2E7D32));
         confirmHolder.add(coloredNote("Scope: " + req.scope.summary, scopeColor));
-
         if (req.countInfo != null) {
             confirmHolder.add(kv("Volume", req.countInfo));
         }
@@ -167,6 +174,14 @@ final class ToolCard extends JPanel implements ConfirmationManager.ConfirmationV
             confirmHolder.add(coloredNote("Why the AI wants this: " + oneLine(req.rationale),
                     MessageViewColors.muted()));
         }
+    }
+
+    private void buildConfirm(ActionRequest req, CompletableFuture<ConfirmationManager.Decision> future) {
+        confirmHolder.removeAll();
+        statusLabel.setText("Awaiting approval");
+        statusLabel.setForeground(new Color(0xE65100));
+
+        renderDetails(req);
 
         // Checkboxes.
         final JCheckBox oosBox = req.requiresOutOfScopeCheckbox()

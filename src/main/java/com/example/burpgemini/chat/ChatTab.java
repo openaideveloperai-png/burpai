@@ -116,6 +116,8 @@ public final class ChatTab extends JPanel {
         JPanel panel = new JPanel(new BorderLayout(6, 6));
         panel.setBorder(BorderFactory.createEmptyBorder(4, 8, 8, 8));
 
+        panel.add(buildQuickActions(), BorderLayout.NORTH);
+
         input.setLineWrap(true);
         input.setWrapStyleWord(true);
         input.setFont(displayFont);
@@ -162,6 +164,46 @@ public final class ChatTab extends JPanel {
         panel.add(inputScroll, BorderLayout.CENTER);
         panel.add(buttons, BorderLayout.EAST);
         return panel;
+    }
+
+    private JComponent buildQuickActions() {
+        JPanel bar = new JPanel();
+        bar.setLayout(new BoxLayout(bar, BoxLayout.X_AXIS));
+        bar.setBorder(BorderFactory.createEmptyBorder(0, 0, 4, 0));
+
+        bar.add(new JLabel("Quick actions: "));
+        bar.add(quickButton("🔍 Passive recon",
+                "Do passive reconnaissance on the in-scope target(s): call list_proxy_history and "
+                + "get_site_map to map endpoints, search_traffic for interesting keywords (token, "
+                + "admin, password, key, debug), and run start_passive_audit on the most relevant "
+                + "captured items. Then summarize the attack surface and any findings with confidence "
+                + "and severity."));
+        bar.add(Box.createHorizontalStrut(4));
+        bar.add(quickButton("🎯 Analyze selection",
+                "Analyze the attached/selected request(s) for vulnerabilities. If there is no captured "
+                + "response, use send_http_request to fetch it first. Ground every finding in evidence "
+                + "with a confidence and severity, then propose and run the smallest safe active test "
+                + "to confirm the most promising issue."));
+        bar.add(Box.createHorizontalStrut(4));
+        bar.add(quickButton("🛡 Security headers",
+                "Check the selected/most-recent response for missing or weak security headers "
+                + "(CSP, HSTS, X-Content-Type-Options, X-Frame-Options, CORS Access-Control-* , "
+                + "cookie flags). Fetch the response with send_http_request if needed. Report each "
+                + "gap with severity."));
+        bar.add(Box.createHorizontalGlue());
+        return bar;
+    }
+
+    private JButton quickButton(String label, String prompt) {
+        JButton b = new JButton(label);
+        b.setMargin(new java.awt.Insets(2, 6, 2, 6));
+        b.setFont(b.getFont().deriveFont(b.getFont().getSize() - 1f));
+        b.addActionListener(e -> {
+            if (controller != null) {
+                controller.submitUserMessage(prompt);
+            }
+        });
+        return b;
     }
 
     private void onSend() {
@@ -239,7 +281,14 @@ public final class ChatTab extends JPanel {
 
     public void refreshBanner() {
         SwingUtilities.invokeLater(() -> {
-            if (!settings.isRequireConfirmActive()) {
+            if (settings.isAutoApprove()) {
+                banner.setText("⚡ AGENT MODE — every action is auto-approved with NO confirmation. "
+                        + (settings.isRespectScope()
+                            ? "Out-of-scope targets are still blocked." : "Scope is OFF too — nothing is blocked."));
+                banner.setBackground(new Color(0xC62828));
+                banner.setForeground(Color.WHITE);
+                banner.setVisible(true);
+            } else if (!settings.isRequireConfirmActive()) {
                 banner.setText("⚠ 'Require confirmation before active actions' is OFF — "
                         + "Tier 1–2 actions run automatically (Tier 3 still always confirms).");
                 banner.setBackground(new Color(0xC62828));
