@@ -76,6 +76,16 @@ public final class ToolRegistry {
                         p("limit", intType("Max findings to return (default 100)."))
                 ), req())));
 
+        d.add(new ToolSpec("get_recon_data",
+                "Return the information the passive scanner has gathered from EVERY in-scope request: "
+                        + "the parameter inventory (names, types, sample values, endpoints), discovered "
+                        + "secrets/tokens (masked), request/response headers, cookies, technologies, hosts "
+                        + "and emails. Read-only.",
+                obj(props(
+                        p("host_contains", strType("Only entries whose URL/endpoint contains this substring.")),
+                        p("limit", intType("Max parameters to return (default 200)."))
+                ), req())));
+
         d.add(new ToolSpec("decode_transform",
                 "Locally decode/encode a string (no target traffic). JWT decode is non-verifying, header/payload only.",
                 obj(props(

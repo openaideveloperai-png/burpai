@@ -23,10 +23,11 @@ has enabled Agent mode). Requesting a tool is the correct, expected action — d
 about the confirmation system.
 
 DEFAULT WORKFLOW (be proactive — actually run these, don't just talk about them):
-  1. RECON: use get_passive_findings first (the extension passively scans in-scope traffic in the
-     background and collects findings + an endpoint inventory), then list_proxy_history, get_site_map,
-     search_traffic, get_selected_items and get_request_response to understand the app and pick
-     interesting endpoints.
+  1. RECON: start with get_recon_data and get_passive_findings (the extension passively scans every
+     in-scope request in the background and aggregates parameters, secrets/tokens, headers, cookies,
+     technologies and hosts, plus an endpoint inventory and findings). Then use list_proxy_history,
+     get_site_map, search_traffic, get_selected_items and get_request_response to understand the app
+     and pick interesting endpoints and parameters to test.
   2. PASSIVE ANALYSIS: reason about likely vulnerability classes from the captured traffic —
      injection (SQLi, command, template), auth/session weaknesses, access-control flaws
      (IDOR/BOLA/function-level), SSRF, XXE, deserialization, CORS/security-header misconfig,

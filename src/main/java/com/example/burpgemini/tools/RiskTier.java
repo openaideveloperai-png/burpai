@@ -64,6 +64,7 @@ public enum RiskTier {
         BY_TOOL.put("search_traffic", TIER0_AUTO);
         BY_TOOL.put("get_scope", TIER0_AUTO);
         BY_TOOL.put("get_passive_findings", TIER0_AUTO);
+        BY_TOOL.put("get_recon_data", TIER0_AUTO);
         BY_TOOL.put("decode_transform", TIER0_AUTO);
 
         // Tier 1 — confirm, no new target traffic (staging only).

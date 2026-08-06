@@ -15,6 +15,7 @@ import burp.api.montoya.scanner.BuiltInAuditConfiguration;
 import burp.api.montoya.scanner.audit.Audit;
 import burp.api.montoya.scanner.audit.issues.AuditIssue;
 import com.example.burpgemini.recon.FindingsStore;
+import com.example.burpgemini.recon.InfoStore;
 import com.example.burpgemini.recon.PassiveFinding;
 import com.example.burpgemini.util.BurpContext;
 import com.example.burpgemini.util.TextDiff;
@@ -45,11 +46,13 @@ public final class ToolExecutor {
     private final BurpContext ctx;
     private final MontoyaApi api;
     private final FindingsStore findings;
+    private final InfoStore info;
 
-    public ToolExecutor(BurpContext ctx, FindingsStore findings) {
+    public ToolExecutor(BurpContext ctx, FindingsStore findings, InfoStore info) {
         this.ctx = ctx;
         this.api = ctx.api();
         this.findings = findings;
+        this.info = info;
     }
 
     /** A resolved captured item, normalised across proxy/sitemap/selection sources. */
@@ -78,6 +81,8 @@ public final class ToolExecutor {
                     return getScope();
                 case "get_passive_findings":
                     return getPassiveFindings(args);
+                case "get_recon_data":
+                    return getReconData(args);
                 case "decode_transform":
                     return decodeTransform(args);
                 case "send_to_repeater":
@@ -364,6 +369,7 @@ public final class ToolExecutor {
             o.addProperty("type", pf.type);
             o.addProperty("url", pf.url);
             o.addProperty("evidence", pf.evidence);
+            o.addProperty("occurrences", pf.occurrences);
             o.addProperty("source", pf.ai ? "ai" : "heuristic");
             f.add(o);
             shown++;
@@ -398,6 +404,85 @@ public final class ToolExecutor {
                     + "enabled and the target is in scope.");
         }
         return r;
+    }
+
+    private JsonObject getReconData(JsonObject args) {
+        String hostContains = getStr(args, "host_contains", null);
+        int limit = getInt(args, "limit", 200);
+
+        JsonArray params = new JsonArray();
+        int pn = 0;
+        for (InfoStore.Param p : info.paramsSnapshot()) {
+            if (pn >= limit) {
+                break;
+            }
+            if (hostContains != null && p.endpoints.stream().noneMatch(e -> e.contains(hostContains))) {
+                continue;
+            }
+            JsonObject o = new JsonObject();
+            o.addProperty("name", p.name);
+            o.add("types", toStrArray(p.types));
+            o.add("sample_values", toStrArray(p.samples));
+            o.add("endpoints", toStrArray(p.endpoints));
+            o.addProperty("hits", p.count.get());
+            params.add(o);
+            pn++;
+        }
+
+        JsonArray secrets = new JsonArray();
+        for (InfoStore.Secret s : info.secretsSnapshot()) {
+            if (hostContains != null && s.urls.stream().noneMatch(u -> u.contains(hostContains))) {
+                continue;
+            }
+            JsonObject o = new JsonObject();
+            o.addProperty("kind", s.kind);
+            o.addProperty("masked_value", s.masked);
+            o.add("seen_at", toStrArray(s.urls));
+            secrets.add(o);
+        }
+
+        JsonObject r = new JsonObject();
+        r.addProperty("param_count", info.paramCount());
+        r.addProperty("secret_count", info.secretCount());
+        r.add("parameters", params);
+        r.add("secrets", secrets);
+        r.add("request_headers", headerStats(info.reqHeadersSnapshot()));
+        r.add("response_headers", headerStats(info.respHeadersSnapshot()));
+        r.add("cookies", headerStats(info.cookiesSnapshot()));
+        r.add("technologies", toStrList(info.technologies(), 100));
+        r.add("hosts", toStrList(info.hosts(), 200));
+        r.add("emails", toStrList(info.emails(), 100));
+        r.addProperty("note", "Aggregated across ALL in-scope requests. Secret values are masked; "
+                + "fetch the full value from the specific request via get_request_response if needed.");
+        return r;
+    }
+
+    private static JsonArray headerStats(java.util.List<InfoStore.NameStat> stats) {
+        JsonArray a = new JsonArray();
+        int n = 0;
+        for (InfoStore.NameStat s : stats) {
+            if (n++ >= 80) {
+                break;
+            }
+            JsonObject o = new JsonObject();
+            o.addProperty("name", s.name);
+            o.addProperty("count", s.count.get());
+            o.add("samples", toStrArray(s.samples));
+            a.add(o);
+        }
+        return a;
+    }
+
+    private static JsonArray toStrList(java.util.List<String> list, int limit) {
+        JsonArray a = new JsonArray();
+        int n = 0;
+        for (String s : list) {
+            if (n++ >= limit) {
+                break;
+            }
+            a.add(s);
+        }
+        return a;
     }
 
     private static int severityRank(String sev) {

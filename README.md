@@ -39,11 +39,14 @@ Both providers are called directly with **your own key/token** — it does **not
 - **⚡ Agent mode (auto‑approve)** — optional hands‑off mode that auto‑approves every action so the
   assistant runs end‑to‑end. Scope still blocks out‑of‑scope traffic; a loud banner shows while it's
   on, and every action is still logged as a tool card.
-- **Background passive recon ("AI Recon" tab)** — a read‑only passive scanner runs local heuristic
-  checks on every in‑scope proxied response and collects an endpoint inventory plus deduplicated
-  findings (missing security headers, insecure cookies, CORS misconfig, JWT/secret exposure, verbose
-  errors, reflected params, …). The chat AI reads it via `get_passive_findings`. Optional, throttled
-  **AI enrichment** can add a deeper pass on new endpoints.
+- **Background passive recon ("AI Recon" tab)** — a read‑only passive scanner mines **every**
+  in‑scope proxied request/response. It **gathers information** (parameter inventory with sample
+  values, discovered secrets/tokens (masked), request/response headers, cookies, technologies, hosts,
+  emails) that keeps accumulating across repeat requests, **plus** deduplicated security findings
+  (missing headers, insecure cookies, CORS misconfig, JWT/secret exposure, verbose errors, reflected
+  params, …) with recurrence counts. Different paths are tracked as different endpoints. The chat AI
+  reads it via `get_recon_data` and `get_passive_findings`. Optional, throttled **AI enrichment** can
+  add a deeper pass on new endpoints.
 - **Web search (Puter)** — Puter's built‑in `web_search` tool is enabled for OpenAI models, so the
   assistant can pull real‑time info into its analysis.
 - **Scope enforcement** — out‑of‑scope target traffic is blocked by default; overriding requires an
@@ -172,11 +175,14 @@ When a safety toggle is relaxed, a persistent warning banner appears at the top 
 6. Use **Cancel** to abort an in‑flight turn, or **Clear chat** to start a new session.
 
 ### Background passive recon
-While you browse the target through Burp, the **AI Recon** tab fills up on its own: the passive
-scanner runs read‑only local checks on every in‑scope response and collects an endpoint inventory
-plus deduplicated findings. Click **Analyze in chat** there to have the assistant call
-`get_passive_findings`, prioritise the results, and suggest next steps. It sends no traffic — it only
-reads what already flows through the proxy. Toggle it (and optional AI enrichment) in the Config tab.
+While you browse the target through Burp, the **AI Recon** tab fills up on its own. The passive
+scanner reads **every** in‑scope response (it sends nothing) and populates five views:
+**Findings** (deduplicated, with a recurrence count), **Endpoints** (each distinct path tracked
+separately), **Parameters** (names, types, and sample values that accumulate across requests),
+**Secrets / Tokens** (masked JWTs/keys/bearer tokens and where they were seen), and
+**Headers / Tech / Hosts**. Click **Analyze in chat** to have the assistant call `get_recon_data`
+and `get_passive_findings`, prioritise everything, and suggest next steps. Toggle passive scanning
+(and optional AI enrichment) in the Config tab.
 
 ---
 
@@ -184,7 +190,7 @@ reads what already flows through the proxy. Toggle it (and optional AI enrichmen
 
 | Tool | Tier | Notes |
 |---|---|---|
-| `list_proxy_history`, `get_request_response`, `get_site_map`, `get_selected_items`, `search_traffic`, `get_scope`, `get_passive_findings`, `decode_transform` | **0 — auto** | Read‑only / local. No dialog. `get_passive_findings` returns the background scanner's collected recon. |
+| `list_proxy_history`, `get_request_response`, `get_site_map`, `get_selected_items`, `search_traffic`, `get_scope`, `get_passive_findings`, `get_recon_data`, `decode_transform` | **0 — auto** | Read‑only / local. No dialog. `get_recon_data` returns the gathered parameter/secret/header/cookie/tech inventory; `get_passive_findings` returns the deduplicated findings. |
 | `send_to_repeater`, `add_to_scope`, `remove_from_scope`, `send_to_intruder` | **1 — confirm** | Stage in a Burp tool / edit scope. No new target traffic. Intruder is staged (Burp's API can't auto‑start an attack); set payloads and start it manually. |
 | `send_http_request`, `start_passive_audit` | **2 — confirm + warning** | Sends one request / runs passive checks. Card shows a request **diff**. |
 | `start_active_audit`, `run_request_sequence` | **3 — confirm + strong warning** | Active scan / a series of crafted requests. Card shows the count and a sample; **always** confirmed. |

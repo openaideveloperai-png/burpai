@@ -42,10 +42,19 @@ public final class FindingsStore {
 
     /** @return true if this was a new (non-duplicate) finding. */
     public boolean addFinding(PassiveFinding f) {
-        if (findings.size() >= MAX_FINDINGS && !findings.containsKey(f.dedupKey())) {
+        String key = f.dedupKey();
+        PassiveFinding existing = findings.get(key);
+        if (existing != null) {
+            // Repeat request to the same endpoint: count it (so it's clearly not "ignored"),
+            // but don't spam a new row.
+            existing.occurrences++;
+            existing.lastSeen = System.currentTimeMillis();
             return false;
         }
-        boolean isNew = findings.putIfAbsent(f.dedupKey(), f) == null;
+        if (findings.size() >= MAX_FINDINGS) {
+            return false;
+        }
+        boolean isNew = findings.putIfAbsent(key, f) == null;
         if (isNew) {
             notifyListener();
         }
@@ -118,8 +127,10 @@ public final class FindingsStore {
     }
 
     /**
-     * Method-independent endpoint signature: {@code host + path-without-query}, with long numeric
-     * and hex/UUID path segments collapsed to {@code {id}} so /users/1 and /users/2 group together.
+     * Endpoint signature: {@code host + full path (without query)}. Different paths — including
+     * different numeric/uuid ids like /users/1 vs /users/2 — are treated as <b>different</b>
+     * endpoints, so each distinct request is tracked on its own. Query-string variations on the same
+     * path group together (their values are captured separately by the info aggregator).
      */
     public static String endpointSignature(String url) {
         if (url == null || url.isBlank()) {
@@ -129,27 +140,9 @@ public final class FindingsStore {
             java.net.URI u = java.net.URI.create(url);
             String host = u.getHost() == null ? "" : u.getHost();
             String path = u.getRawPath() == null ? "" : u.getRawPath();
-            String[] segs = path.split("/");
-            StringBuilder sb = new StringBuilder();
-            for (String s : segs) {
-                if (s.isEmpty()) {
-                    continue;
-                }
-                sb.append('/').append(looksLikeId(s) ? "{id}" : s);
-            }
-            return host + (sb.length() == 0 ? "/" : sb.toString());
+            return host + (path.isEmpty() ? "/" : path);
         } catch (RuntimeException e) {
             return url;
         }
-    }
-
-    private static boolean looksLikeId(String s) {
-        if (s.length() >= 8 && s.chars().allMatch(c -> Character.isLetterOrDigit(c) || c == '-')) {
-            boolean hasDigit = s.chars().anyMatch(Character::isDigit);
-            if (hasDigit && s.matches("[0-9a-fA-F-]{8,}")) {
-                return true; // hex / uuid-ish
-            }
-        }
-        return s.matches("\\d+"); // pure number
     }
 }

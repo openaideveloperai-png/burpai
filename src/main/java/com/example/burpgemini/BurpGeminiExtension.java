@@ -15,6 +15,7 @@ import com.example.burpgemini.config.ConfigTab;
 import com.example.burpgemini.config.Settings;
 import com.example.burpgemini.recon.AiEnricher;
 import com.example.burpgemini.recon.FindingsStore;
+import com.example.burpgemini.recon.InfoStore;
 import com.example.burpgemini.recon.PassiveScanner;
 import com.example.burpgemini.recon.ReconTab;
 import com.example.burpgemini.safety.ConfirmationManager;
@@ -53,11 +54,12 @@ public final class BurpGeminiExtension implements BurpExtension {
 
         // Background passive recon.
         FindingsStore findings = new FindingsStore();
-        ToolExecutor executor = new ToolExecutor(ctx, findings);
+        InfoStore info = new InfoStore();
+        ToolExecutor executor = new ToolExecutor(ctx, findings, info);
         ScopeGuard scopeGuard = new ScopeGuard(api, settings);
         ConfirmationManager confirmations = new ConfirmationManager(settings);
 
-        PassiveScanner scanner = new PassiveScanner(ctx, findings);
+        PassiveScanner scanner = new PassiveScanner(ctx, findings, info);
         AiEnricher enricher = new AiEnricher(ctx, findings);
         scanner.setEnricher(enricher);
         enricher.start();
@@ -74,7 +76,7 @@ public final class BurpGeminiExtension implements BurpExtension {
                 ctx, settings, providers, executor, confirmations, scopeGuard, registry, chatTab);
         chatTab.setController(controller);
 
-        ReconTab reconTab = new ReconTab(findings);
+        ReconTab reconTab = new ReconTab(findings, info);
         reconTab.setController(controller);
 
         ConfigTab configTab = new ConfigTab(ctx, settings, providers);

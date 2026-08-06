@@ -13,6 +13,9 @@ public final class PassiveFinding {
     public final String evidence;    // short, human-readable
     public final long time;
     public final boolean ai;         // true when produced by AI enrichment rather than a local check
+    /** How many times this finding has recurred (repeat requests to the same endpoint). */
+    public volatile int occurrences = 1;
+    public volatile long lastSeen;
 
     public PassiveFinding(String type, String severity, String confidence,
                           String url, String evidence, boolean ai) {
@@ -23,6 +26,7 @@ public final class PassiveFinding {
         this.evidence = evidence;
         this.ai = ai;
         this.time = System.currentTimeMillis();
+        this.lastSeen = this.time;
     }
 
     /** One finding of a given type per endpoint (method-independent path signature). */
