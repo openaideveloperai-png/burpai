@@ -38,6 +38,12 @@ It calls the Gemini REST API directly with **your own API key** — it does **no
 
 ---
 
+## Prebuilt JAR
+
+A ready‑to‑load, shaded JAR is checked in at **[`dist/burp-gemini-assistant.jar`](dist/burp-gemini-assistant.jar)** —
+download it and skip straight to *[Load into Burp](#load-into-burp)*. To rebuild it yourself, follow
+the steps below.
+
 ## Build
 
 Prerequisites: **JDK 17+** (the project targets Java 17 bytecode; it builds fine on a newer JDK).
