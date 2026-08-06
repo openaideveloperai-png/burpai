@@ -1,7 +1,6 @@
 package com.example.burpgemini.gemini;
 
 import com.google.gson.JsonObject;
-import com.google.gson.annotations.SerializedName;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -37,14 +36,25 @@ public final class GeminiModels {
     }
 
     public static final class GenerationConfig {
-        // Gemini 3 replaces temperature/top_p/top_k with a thinking level.
-        @SerializedName("thinking_level")
-        public String thinkingLevel;
+        // The live Gemini API configures reasoning depth via generationConfig.thinkingConfig
+        // (thinkingBudget), not a top-level "thinking_level" field.
+        public ThinkingConfig thinkingConfig;
 
         public static GenerationConfig thinking(String level) {
             GenerationConfig g = new GenerationConfig();
-            g.thinkingLevel = level;
+            g.thinkingConfig = ThinkingConfig.forLevel(level);
             return g;
+        }
+    }
+
+    public static final class ThinkingConfig {
+        /** Token budget for internal reasoning: -1 = dynamic (deep), 0 = minimal/off. */
+        public Integer thinkingBudget;
+
+        static ThinkingConfig forLevel(String level) {
+            ThinkingConfig t = new ThinkingConfig();
+            t.thinkingBudget = "low".equalsIgnoreCase(level) ? 0 : -1;
+            return t;
         }
     }
 

@@ -93,7 +93,7 @@ public final class GeminiClient {
         body.contents = history;
         body.tools = tools;
         body.generationConfig = GenerationConfig.thinking(thinkingLevel);
-        return post(model, gson.toJson(body), /*apiKey*/ currentKey);
+        return post(model, body, /*apiKey*/ currentKey);
     }
 
     private volatile String currentKey = "";
@@ -109,10 +109,10 @@ public final class GeminiClient {
         GenerateContentRequest body = new GenerateContentRequest();
         body.contents.add(Content.userText("ping"));
         body.generationConfig = GenerationConfig.thinking("low");
-        return post(model, gson.toJson(body), apiKey);
+        return post(model, body, apiKey);
     }
 
-    private GeminiResult post(String model, String jsonBody, String apiKey) {
+    private GeminiResult post(String model, GenerateContentRequest body, String apiKey) {
         if (apiKey == null || apiKey.isBlank()) {
             return GeminiResult.error("No Gemini API key set. Add one in the Config tab "
                     + "(or set the GEMINI_API_KEY environment variable).", 0);
@@ -122,8 +122,10 @@ public final class GeminiClient {
         long backoffMs = 1000;
         String lastError = "Request failed.";
         int lastStatus = 0;
+        boolean strippedGenConfig = false;
 
         for (int attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+            String jsonBody = gson.toJson(body);
             HttpRequest req = HttpRequest.newBuilder(URI.create(url))
                     .timeout(Duration.ofSeconds(120))
                     .header("x-goog-api-key", apiKey)
@@ -192,6 +194,15 @@ public final class GeminiClient {
                 }
                 return GeminiResult.error(lastError, status);
             }
+            // Self-healing: some models reject generationConfig/thinkingConfig. Strip it and retry
+            // once so a turn never hard-fails on the reasoning-depth hint.
+            if (status == 400 && !strippedGenConfig && body.generationConfig != null
+                    && isGenerationConfigRejection(respBody)) {
+                body.generationConfig = null;
+                strippedGenConfig = true;
+                continue;
+            }
+
             // Other 4xx — not retryable.
             return GeminiResult.error("Gemini request failed (HTTP " + status + "). "
                     + (apiMsg == null ? "" : apiMsg), status);
@@ -259,6 +270,16 @@ public final class GeminiClient {
         if (f != null) {
             f.cancel(true);
         }
+    }
+
+    /** True when a 400 looks like a rejection of generationConfig/thinkingConfig fields. */
+    private static boolean isGenerationConfigRejection(String respBody) {
+        if (respBody == null) {
+            return false;
+        }
+        String b = respBody.toLowerCase();
+        return b.contains("generation_config") || b.contains("generationconfig")
+                || b.contains("thinking") || b.contains("unknown name");
     }
 
     private String extractApiError(String body) {
