@@ -8,6 +8,7 @@ import burp.api.montoya.ui.contextmenu.ContextMenuItemsProvider;
 
 import com.example.burpgemini.ai.AiProvider;
 import com.example.burpgemini.ai.GeminiProvider;
+import com.example.burpgemini.ai.ModelsCatalog;
 import com.example.burpgemini.ai.OpenAiCompatibleProvider;
 import com.example.burpgemini.chat.ChatController;
 import com.example.burpgemini.chat.ChatTab;
@@ -79,7 +80,8 @@ public final class BurpGeminiExtension implements BurpExtension {
         ReconTab reconTab = new ReconTab(findings, info);
         reconTab.setController(controller);
 
-        ConfigTab configTab = new ConfigTab(ctx, settings, providers);
+        ModelsCatalog catalog = new ModelsCatalog();
+        ConfigTab configTab = new ConfigTab(ctx, settings, providers, catalog);
         configTab.setChatTab(chatTab);
 
         // Register suite tabs.

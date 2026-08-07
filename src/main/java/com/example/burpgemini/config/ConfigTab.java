@@ -1,9 +1,13 @@
 package com.example.burpgemini.config;
 
 import com.example.burpgemini.ai.AiProvider;
+import com.example.burpgemini.ai.ModelsCatalog;
 import com.example.burpgemini.ai.OpenAiCompatibleProvider;
 import com.example.burpgemini.chat.ChatTab;
 import com.example.burpgemini.util.BurpContext;
+
+import java.util.LinkedHashSet;
+import java.util.Set;
 
 import javax.swing.BorderFactory;
 import javax.swing.Box;
@@ -34,9 +38,11 @@ public final class ConfigTab extends JPanel {
     private final BurpContext ctx;
     private final Settings settings;
     private final List<AiProvider> providers;
+    private final ModelsCatalog catalog;
     private ChatTab chatTab;
 
     private final JComboBox<String> providerBox = new JComboBox<>();
+    private final JLabel modelInfo = new JLabel(" ");
 
     // Gemini
     private final JPasswordField apiKeyField = new JPasswordField(36);
@@ -67,10 +73,11 @@ public final class ConfigTab extends JPanel {
     private JLabel geminiHeader;
     private JLabel puterHeader;
 
-    public ConfigTab(BurpContext ctx, Settings settings, List<AiProvider> providers) {
+    public ConfigTab(BurpContext ctx, Settings settings, List<AiProvider> providers, ModelsCatalog catalog) {
         this.ctx = ctx;
         this.settings = settings;
         this.providers = providers;
+        this.catalog = catalog;
 
         for (AiProvider p : providers) {
             providerBox.addItem(p.displayName());
@@ -93,9 +100,17 @@ public final class ConfigTab extends JPanel {
         add(statusLabel);
         add(Box.createVerticalGlue());
 
-        providerBox.addActionListener(e -> updateEnabledState());
+        providerBox.addActionListener(e -> {
+            updateEnabledState();
+            updateModelInfo();
+        });
+        modelBox.addActionListener(e -> updateModelInfo());
+        puterModelBox.addActionListener(e -> updateModelInfo());
         loadFromSettings();
         updateEnabledState();
+        updateModelInfo();
+        // Best-effort: load model specs from models.dev in the background.
+        ctx.executor().submit(() -> loadCatalog(false));
     }
 
     public void setChatTab(ChatTab chatTab) {
@@ -116,6 +131,12 @@ public final class ConfigTab extends JPanel {
         form.add(new JLabel("AI provider:"), c);
         c.gridx = 1;
         form.add(providerBox, c);
+        row++;
+
+        c.gridx = 1;
+        c.gridy = row;
+        modelInfo.setFont(modelInfo.getFont().deriveFont(Font.ITALIC, modelInfo.getFont().getSize() - 1f));
+        form.add(modelInfo, c);
         row++;
 
         // ---- Gemini ----
@@ -251,11 +272,81 @@ public final class ConfigTab extends JPanel {
         });
         JButton test = new JButton("Test connection");
         test.addActionListener(e -> onTest());
+        JButton refreshModels = new JButton("Refresh models (models.dev)");
+        refreshModels.setToolTipText("Load up-to-date model specs & pricing from models.dev.");
+        refreshModels.addActionListener(e -> {
+            setStatus("Loading model specs from models.dev…", null);
+            ctx.executor().submit(() -> loadCatalog(true));
+        });
         p.add(save);
         p.add(Box.createHorizontalStrut(8));
         p.add(test);
+        p.add(Box.createHorizontalStrut(8));
+        p.add(refreshModels);
         p.add(Box.createHorizontalGlue());
         return p;
+    }
+
+    /** Fetch the models.dev catalog (off the EDT) and repopulate the dropdowns + info label. */
+    private void loadCatalog(boolean report) {
+        String err = catalog.fetch();
+        SwingUtilities.invokeLater(() -> {
+            if (err != null) {
+                if (report) {
+                    setStatus(err, new Color(0xC62828));
+                }
+                return;
+            }
+            repopulateModelBoxes();
+            updateModelInfo();
+            if (report) {
+                setStatus("Loaded specs for " + catalog.size() + " models from models.dev.",
+                        new Color(0x2E7D32));
+            }
+        });
+    }
+
+    private void repopulateModelBoxes() {
+        // Gemini dropdown: hardcoded defaults + any "gemini*" models from the catalog.
+        Set<String> gemini = new LinkedHashSet<>(java.util.Arrays.asList(Settings.MODELS));
+        gemini.addAll(catalog.modelIds(mi -> mi.id.toLowerCase().startsWith("gemini")));
+        rebuildCombo(modelBox, gemini, settings.getModel());
+
+        // Puter dropdown: hardcoded defaults + OpenAI/GPT models from the catalog.
+        Set<String> puter = new LinkedHashSet<>(java.util.Arrays.asList(OpenAiCompatibleProvider.MODELS));
+        puter.addAll(catalog.modelIds(mi -> mi.id.toLowerCase().startsWith("gpt")
+                || "openai".equalsIgnoreCase(mi.providerId)));
+        rebuildCombo(puterModelBox, puter, settings.getPuterModel());
+    }
+
+    private static void rebuildCombo(JComboBox<String> box, Set<String> items, String preferred) {
+        Object current = box.getSelectedItem();
+        box.removeAllItems();
+        for (String i : items) {
+            box.addItem(i);
+        }
+        Object want = current != null && !String.valueOf(current).isBlank() ? current : preferred;
+        if (want != null) {
+            box.setSelectedItem(want);
+        }
+    }
+
+    private void updateModelInfo() {
+        if (!catalog.isLoaded()) {
+            modelInfo.setText("Model specs: click 'Refresh models (models.dev)'.");
+            return;
+        }
+        boolean gemini = Settings.PROVIDER_GEMINI.equals(selectedProviderId());
+        Object sel = gemini ? modelBox.getSelectedItem() : puterModelBox.getSelectedItem();
+        String model = sel == null ? "" : sel.toString().trim();
+        if (model.isEmpty()) {
+            modelInfo.setText(" ");
+            return;
+        }
+        ModelsCatalog.ModelInfo mi = catalog.lookup(model);
+        modelInfo.setText(mi == null
+                ? model + " — not found on models.dev"
+                : model + " — " + mi.summary());
     }
 
     private void loadFromSettings() {

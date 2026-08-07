@@ -49,6 +49,9 @@ Both providers are called directly with **your own key/token** — it does **not
   add a deeper pass on new endpoints.
 - **Web search (Puter)** — Puter's built‑in `web_search` tool is enabled for OpenAI models, so the
   assistant can pull real‑time info into its analysis.
+- **Model specs from [models.dev](https://models.dev)** — the Config tab can load up‑to‑date model
+  metadata (context window, input/output pricing, tool‑call & reasoning support) to populate the
+  model dropdowns and show a one‑line spec for the selected model.
 - **Scope enforcement** — out‑of‑scope target traffic is blocked by default; overriding requires an
   explicit setting *and* a per‑action checkbox.
 - **No arbitrary shell/OS tool** — the model can only affect a target through the mediated HTTP/Burp
@@ -96,7 +99,10 @@ bundled.
 
 Open the **AI Assistant Config** tab and pick **AI provider**. The form greys out the fields for the
 provider you're not using. Then **Save** and click **Test connection** (a bad key/token reports the
-exact error).
+exact error). Click **Refresh models (models.dev)** to pull up‑to‑date model specs & pricing from
+[models.dev](https://models.dev) — the model dropdowns are populated from the catalog and a one‑line
+spec (context window · input/output $ per 1M · tools/reasoning/vision) is shown for the selected
+model. (This is loaded best‑effort in the background on open; the button forces a refresh.)
 
 ### Option A — Google Gemini
 1. Create a key at **https://aistudio.google.com/apikey**.
@@ -221,6 +227,8 @@ Key files:
 - `ai/GeminiProvider` — Gemini `generateContent`; preserves each `thoughtSignature` so tool calls work.
 - `ai/OpenAiCompatibleProvider` — Puter's OpenAI‑compatible endpoint (tools / tool_calls).
 - `ai/HttpTransport` — shared cancellable POST with retries/backoff (429/5xx/network).
+- `ai/ModelsCatalog` — fetches & parses the [models.dev](https://models.dev) `api.json` catalog for
+  model specs/pricing used by the Config tab.
 - `recon/PassiveScanner` — Proxy response handler running local heuristic checks (read‑only);
   `recon/FindingsStore` holds the deduplicated findings + endpoint inventory; `recon/ReconTab` is the
   live view; `recon/AiEnricher` is the optional throttled AI pass.
