@@ -72,7 +72,8 @@ with exactly: nothing notable
         this.settings = ctx.settings();
         this.store = store;
         // Own provider instances → independent HTTP transport from the chat.
-        this.providers = List.of(new GeminiProvider(ctx), new OpenAiCompatibleProvider(ctx));
+        this.providers = List.of(new GeminiProvider(ctx),
+                OpenAiCompatibleProvider.puter(ctx), OpenAiCompatibleProvider.custom(ctx));
     }
 
     public void start() {

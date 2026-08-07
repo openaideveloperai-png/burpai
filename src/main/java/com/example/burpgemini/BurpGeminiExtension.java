@@ -69,7 +69,8 @@ public final class BurpGeminiExtension implements BurpExtension {
         // AI providers (switchable). First entry is the default.
         List<AiProvider> providers = List.of(
                 new GeminiProvider(ctx),
-                new OpenAiCompatibleProvider(ctx));
+                OpenAiCompatibleProvider.puter(ctx),
+                OpenAiCompatibleProvider.custom(ctx));
 
         // UI + controller.
         ChatTab chatTab = new ChatTab(ctx, settings);

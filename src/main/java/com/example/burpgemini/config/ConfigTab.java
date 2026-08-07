@@ -19,6 +19,7 @@ import javax.swing.JComponent;
 import javax.swing.JLabel;
 import javax.swing.JPanel;
 import javax.swing.JPasswordField;
+import javax.swing.JTextField;
 import javax.swing.SwingUtilities;
 import java.awt.Color;
 import java.awt.Component;
@@ -55,6 +56,16 @@ public final class ConfigTab extends JPanel {
     private final JComboBox<String> puterModelBox = new JComboBox<>(OpenAiCompatibleProvider.MODELS);
     private final JCheckBox puterWebSearch = new JCheckBox("Enable web search (OpenAI models — real-time info)");
 
+    // Custom (any OpenAI-compatible provider, driven by models.dev)
+    private final JComboBox<String> mdProviderBox = new JComboBox<>();
+    private final java.util.List<ModelsCatalog.ProviderInfo> mdProviders = new java.util.ArrayList<>();
+    private final JTextField customEndpointField = new JTextField(34);
+    private final JPasswordField customKeyField = new JPasswordField(34);
+    private final JComboBox<String> customModelBox = new JComboBox<>();
+    private final JLabel customHint = new JLabel(" ");
+    private JLabel customHeader;
+    private boolean populating;
+
     // Safety
     private final JCheckBox autoApprove = new JCheckBox(
             "⚡ Agent mode: auto-approve ALL actions (no confirmation; scope still applies)");
@@ -83,6 +94,8 @@ public final class ConfigTab extends JPanel {
             providerBox.addItem(p.displayName());
         }
         puterModelBox.setEditable(true);
+        customModelBox.setEditable(true);
+        mdProviderBox.addActionListener(e -> onPickModelsDevProvider());
 
         setLayout(new BoxLayout(this, BoxLayout.Y_AXIS));
         setBorder(BorderFactory.createEmptyBorder(14, 16, 14, 16));
@@ -106,6 +119,7 @@ public final class ConfigTab extends JPanel {
         });
         modelBox.addActionListener(e -> updateModelInfo());
         puterModelBox.addActionListener(e -> updateModelInfo());
+        customModelBox.addActionListener(e -> updateModelInfo());
         loadFromSettings();
         updateEnabledState();
         updateModelInfo();
@@ -219,6 +233,57 @@ public final class ConfigTab extends JPanel {
         form.add(puterWebSearch, c);
         row++;
 
+        // ---- Custom (any OpenAI-compatible provider) ----
+        customHeader = sectionLabel("Custom provider (any OpenAI-compatible / models.dev)");
+        c.gridx = 0;
+        c.gridy = row;
+        c.gridwidth = 2;
+        form.add(customHeader, c);
+        c.gridwidth = 1;
+        row++;
+
+        c.gridx = 0;
+        c.gridy = row;
+        form.add(new JLabel("models.dev provider:"), c);
+        c.gridx = 1;
+        c.fill = GridBagConstraints.HORIZONTAL;
+        form.add(mdProviderBox, c);
+        c.fill = GridBagConstraints.NONE;
+        row++;
+
+        c.gridx = 1;
+        c.gridy = row;
+        customHint.setFont(customHint.getFont().deriveFont(Font.ITALIC, customHint.getFont().getSize() - 1f));
+        form.add(customHint, c);
+        row++;
+
+        c.gridx = 0;
+        c.gridy = row;
+        form.add(new JLabel("Endpoint URL:"), c);
+        c.gridx = 1;
+        c.fill = GridBagConstraints.HORIZONTAL;
+        form.add(customEndpointField, c);
+        c.fill = GridBagConstraints.NONE;
+        row++;
+
+        c.gridx = 0;
+        c.gridy = row;
+        form.add(new JLabel("API key:"), c);
+        c.gridx = 1;
+        c.fill = GridBagConstraints.HORIZONTAL;
+        form.add(customKeyField, c);
+        c.fill = GridBagConstraints.NONE;
+        row++;
+
+        c.gridx = 0;
+        c.gridy = row;
+        form.add(new JLabel("Model:"), c);
+        c.gridx = 1;
+        c.fill = GridBagConstraints.HORIZONTAL;
+        form.add(customModelBox, c);
+        c.fill = GridBagConstraints.NONE;
+        row++;
+
         // ---- Safety ----
         c.gridx = 0;
         c.gridy = row;
@@ -298,10 +363,11 @@ public final class ConfigTab extends JPanel {
                 return;
             }
             repopulateModelBoxes();
+            populateMdProviders();
             updateModelInfo();
             if (report) {
-                setStatus("Loaded specs for " + catalog.size() + " models from models.dev.",
-                        new Color(0x2E7D32));
+                setStatus("Loaded " + catalog.providers().size() + " providers / "
+                        + catalog.size() + " models from models.dev.", new Color(0x2E7D32));
             }
         });
     }
@@ -331,13 +397,74 @@ public final class ConfigTab extends JPanel {
         }
     }
 
+    /** Fill the models.dev provider picker without disturbing the user's saved custom settings. */
+    private void populateMdProviders() {
+        populating = true;
+        try {
+            mdProviders.clear();
+            mdProviderBox.removeAllItems();
+            mdProviders.add(null); // index 0 = placeholder (no auto-fill)
+            mdProviderBox.addItem("(choose a provider to auto-fill)");
+            for (ModelsCatalog.ProviderInfo pi : catalog.providers()) {
+                mdProviders.add(pi);
+                mdProviderBox.addItem(pi.name + "  (" + pi.id + ")");
+            }
+            mdProviderBox.setSelectedIndex(0);
+        } finally {
+            populating = false;
+        }
+    }
+
+    /** Explicit user pick: auto-fill the endpoint + model list + key hint for the chosen provider. */
+    private void onPickModelsDevProvider() {
+        if (populating) {
+            return;
+        }
+        int idx = mdProviderBox.getSelectedIndex();
+        if (idx < 1 || idx >= mdProviders.size() || mdProviders.get(idx) == null) {
+            return;
+        }
+        ModelsCatalog.ProviderInfo pi = mdProviders.get(idx);
+        String ep = pi.chatEndpoint();
+        if (!ep.isBlank()) {
+            customEndpointField.setText(ep);
+        }
+        List<String> ids = catalog.modelIdsForProvider(pi.id);
+        customModelBox.removeAllItems();
+        for (String id : ids) {
+            customModelBox.addItem(id);
+        }
+        if (!ids.isEmpty()) {
+            customModelBox.setSelectedIndex(0);
+        }
+        StringBuilder h = new StringBuilder();
+        if (!pi.env.isEmpty()) {
+            h.append("Key env: ").append(String.join(", ", pi.env));
+        }
+        if (pi.doc != null && !pi.doc.isBlank()) {
+            if (h.length() > 0) {
+                h.append("   ·   ");
+            }
+            h.append("docs: ").append(pi.doc);
+        }
+        customHint.setText(h.length() == 0 ? " " : h.toString());
+        updateModelInfo();
+    }
+
     private void updateModelInfo() {
         if (!catalog.isLoaded()) {
             modelInfo.setText("Model specs: click 'Refresh models (models.dev)'.");
             return;
         }
-        boolean gemini = Settings.PROVIDER_GEMINI.equals(selectedProviderId());
-        Object sel = gemini ? modelBox.getSelectedItem() : puterModelBox.getSelectedItem();
+        String id = selectedProviderId();
+        Object sel;
+        if (Settings.PROVIDER_GEMINI.equals(id)) {
+            sel = modelBox.getSelectedItem();
+        } else if (Settings.PROVIDER_CUSTOM.equals(id)) {
+            sel = customModelBox.getSelectedItem();
+        } else {
+            sel = puterModelBox.getSelectedItem();
+        }
         String model = sel == null ? "" : sel.toString().trim();
         if (model.isEmpty()) {
             modelInfo.setText(" ");
@@ -359,6 +486,14 @@ public final class ConfigTab extends JPanel {
         puterTokenField.putClientProperty("JTextField.placeholderText",
                 settings.puterTokenFromEnv() ? "(using PUTER_AUTH_TOKEN env var)"
                         : settings.hasPuterToken() ? "(saved — leave blank to keep)" : "");
+        customKeyField.setText("");
+        customKeyField.putClientProperty("JTextField.placeholderText",
+                settings.customKeyFromEnv() ? "(using env var)"
+                        : settings.hasCustomKey() ? "(saved — leave blank to keep)" : "");
+        customEndpointField.setText(settings.getCustomEndpoint());
+        if (!settings.getCustomModel().isBlank()) {
+            customModelBox.setSelectedItem(settings.getCustomModel());
+        }
 
         selectProvider(settings.getProvider());
         modelBox.setSelectedItem(settings.getModel());
@@ -401,6 +536,27 @@ public final class ConfigTab extends JPanel {
             settings.setPuterModel(pm.toString().trim());
         }
         settings.setPuterWebSearch(puterWebSearch.isSelected());
+
+        // Custom provider.
+        char[] ck = customKeyField.getPassword();
+        String customKey = new String(ck).trim();
+        java.util.Arrays.fill(ck, '\0');
+        if (!customKey.isEmpty()) {
+            settings.setCustomKey(customKey);
+            customKeyField.setText("");
+            customKeyField.putClientProperty("JTextField.placeholderText", "(saved — leave blank to keep)");
+        }
+        settings.setCustomEndpoint(customEndpointField.getText());
+        Object cm = customModelBox.getSelectedItem();
+        if (cm != null && !cm.toString().isBlank()) {
+            settings.setCustomModel(cm.toString().trim());
+        }
+        int mdIdx = mdProviderBox.getSelectedIndex();
+        if (mdIdx >= 1 && mdIdx < mdProviders.size() && mdProviders.get(mdIdx) != null) {
+            ModelsCatalog.ProviderInfo pi = mdProviders.get(mdIdx);
+            settings.setCustomName(pi.name);
+            settings.setCustomKeyEnv(pi.env.isEmpty() ? "" : pi.env.get(0));
+        }
         settings.setAutoApprove(autoApprove.isSelected());
         settings.setRequireConfirmActive(requireConfirm.isSelected());
         settings.setRespectScope(respectScope.isSelected());
@@ -442,8 +598,11 @@ public final class ConfigTab extends JPanel {
     private void updateEnabledState() {
         String id = selectedProviderId();
         boolean gemini = Settings.PROVIDER_GEMINI.equals(id);
+        boolean puter = Settings.PROVIDER_PUTER.equals(id);
+        boolean custom = Settings.PROVIDER_CUSTOM.equals(id);
         setGroupEnabled(gemini, geminiHeader, apiKeyField, modelBox, thinkingBox);
-        setGroupEnabled(!gemini, puterHeader, puterTokenField, puterModelBox);
+        setGroupEnabled(puter, puterHeader, puterTokenField, puterModelBox, puterWebSearch);
+        setGroupEnabled(custom, customHeader, mdProviderBox, customEndpointField, customKeyField, customModelBox);
     }
 
     private void setGroupEnabled(boolean enabled, JComponent... comps) {

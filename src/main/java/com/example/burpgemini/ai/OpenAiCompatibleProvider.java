@@ -22,20 +22,25 @@ import com.google.gson.JsonSyntaxException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.function.BooleanSupplier;
+import java.util.function.Supplier;
 
 /**
- * Puter AI backend via its OpenAI-compatible Chat Completions endpoint
- * ({@code https://api.puter.com/puterai/openai/v1/chat/completions}, Bearer auth-token).
+ * A generic OpenAI-compatible Chat Completions backend (Bearer auth). One instance is configured for
+ * Puter's endpoint; another is a user-defined <em>Custom</em> provider whose endpoint/key/model can
+ * point at <b>any</b> OpenAI-compatible provider (OpenAI, OpenRouter, Groq, DeepSeek, Mistral, xAI,
+ * Together, …), pre-filled from the models.dev catalog.
  *
- * <p>Puter proxies GPT/Claude/Gemini/Grok behind the standard OpenAI wire format, so this provider
- * is a general OpenAI-compatible client. Function calling uses OpenAI's {@code tools} /
- * {@code tool_calls} convention, which this class maps to/from the neutral conversation model.
+ * <p>Function calling uses OpenAI's {@code tools} / {@code tool_calls} convention, mapped to/from the
+ * neutral conversation model. Prior tool exchanges are flattened to text to stay robust across
+ * proxies whose bridges mishandle resent structured tool history.
  */
 public final class OpenAiCompatibleProvider implements AiProvider {
 
-    private static final String ENDPOINT = "https://api.puter.com/puterai/openai/v1/chat/completions";
+    /** The built-in Puter endpoint. */
+    public static final String PUTER_ENDPOINT = "https://api.puter.com/puterai/openai/v1/chat/completions";
 
-    /** Models offered in the Config dropdown (editable) — Puter's OpenAI line plus a couple of others. */
+    /** Models offered in the Puter dropdown (editable) — Puter's OpenAI line plus a couple of others. */
     public static final String[] MODELS = {
             "gpt-5.3-chat",
             "gpt-5.4-nano",
@@ -51,35 +56,81 @@ public final class OpenAiCompatibleProvider implements AiProvider {
     };
     public static final String DEFAULT_MODEL = MODELS[0];
 
+    /** Live configuration for one OpenAI-compatible endpoint (read from settings on each call). */
+    public static final class Config {
+        final String id;
+        final Supplier<String> displayName;
+        final Supplier<String> endpoint;
+        final Supplier<String> token;
+        final Supplier<String> model;
+        final BooleanSupplier webSearch;
+        final Supplier<String> notConfiguredHint;
+
+        public Config(String id, Supplier<String> displayName, Supplier<String> endpoint,
+                      Supplier<String> token, Supplier<String> model, BooleanSupplier webSearch,
+                      Supplier<String> notConfiguredHint) {
+            this.id = id;
+            this.displayName = displayName;
+            this.endpoint = endpoint;
+            this.token = token;
+            this.model = model;
+            this.webSearch = webSearch;
+            this.notConfiguredHint = notConfiguredHint;
+        }
+    }
+
     private final BurpContext ctx;
-    private final Settings settings;
+    private final Config cfg;
     private final HttpTransport transport = new HttpTransport();
     private final Gson gson = new GsonBuilder().disableHtmlEscaping().create();
 
-    public OpenAiCompatibleProvider(BurpContext ctx) {
+    public OpenAiCompatibleProvider(BurpContext ctx, Config cfg) {
         this.ctx = ctx;
-        this.settings = ctx.settings();
+        this.cfg = cfg;
+    }
+
+    /** Factory: the built-in Puter backend. */
+    public static OpenAiCompatibleProvider puter(BurpContext ctx) {
+        Settings s = ctx.settings();
+        return new OpenAiCompatibleProvider(ctx, new Config(
+                Settings.PROVIDER_PUTER,
+                () -> "Puter AI (OpenAI-compatible)",
+                () -> PUTER_ENDPOINT,
+                s::getPuterToken, s::getPuterModel, s::isPuterWebSearch,
+                () -> "No Puter auth token set. Get one at puter.com/dashboard → API tokens → Create "
+                        + "token, then paste it in the Config tab (or set PUTER_AUTH_TOKEN)."));
+    }
+
+    /** Factory: a user-defined OpenAI-compatible provider (any endpoint / key / model). */
+    public static OpenAiCompatibleProvider custom(BurpContext ctx) {
+        Settings s = ctx.settings();
+        return new OpenAiCompatibleProvider(ctx, new Config(
+                Settings.PROVIDER_CUSTOM,
+                () -> "Custom: " + s.getCustomName(),
+                s::getCustomEndpoint, s::getCustomKey, s::getCustomModel,
+                () -> false,
+                () -> "Custom provider not configured. In the Config tab, pick a provider from "
+                        + "models.dev (or set the endpoint URL) and paste an API key."));
     }
 
     @Override
     public String id() {
-        return "puter";
+        return cfg.id;
     }
 
     @Override
     public String displayName() {
-        return "Puter AI (OpenAI-compatible)";
+        return cfg.displayName.get();
     }
 
     @Override
     public boolean isConfigured() {
-        return settings.hasPuterToken();
+        return !cfg.token.get().isBlank() && !cfg.endpoint.get().isBlank();
     }
 
     @Override
     public String notConfiguredHint() {
-        return "No Puter auth token set. Get one at puter.com/dashboard → API tokens → Create token, "
-                + "then paste it in the Config tab (or set PUTER_AUTH_TOKEN).";
+        return cfg.notConfiguredHint.get();
     }
 
     @Override
@@ -89,17 +140,16 @@ public final class OpenAiCompatibleProvider implements AiProvider {
 
     @Override
     public TurnResult sendTurn(String systemPrompt, List<ChatMessage> history, List<ToolSpec> tools) {
-        String token = settings.getPuterToken();
-        if (token.isBlank()) {
+        if (!isConfigured()) {
             return TurnResult.error(notConfiguredHint(), 0);
         }
         ChatRequest body = new ChatRequest();
-        String model = settings.getPuterModel();
+        String model = cfg.model.get();
         body.model = model;
         body.messages = toMessages(systemPrompt, history);
         List<ToolDef> toolDefs = toTools(tools);
-        // Puter's built-in web_search tool (OpenAI models only) — fetches up-to-date info.
-        if (settings.isPuterWebSearch() && isOpenAiModel(model)) {
+        // Built-in web_search tool (OpenAI models only) — fetches up-to-date info.
+        if (cfg.webSearch.getAsBoolean() && isOpenAiModel(model)) {
             if (toolDefs == null) {
                 toolDefs = new ArrayList<>();
             }
@@ -107,26 +157,26 @@ public final class OpenAiCompatibleProvider implements AiProvider {
         }
         body.tools = toolDefs;
         body.tool_choice = (toolDefs != null && !toolDefs.isEmpty()) ? "auto" : null;
-        return call(body, token);
+        return call(body);
     }
 
     @Override
     public TurnResult testConnection() {
-        String token = settings.getPuterToken();
-        if (token.isBlank()) {
+        if (!isConfigured()) {
             return TurnResult.error(notConfiguredHint(), 0);
         }
         ChatRequest body = new ChatRequest();
-        body.model = settings.getPuterModel();
+        body.model = cfg.model.get();
         body.messages.add(Message.of("user", "ping"));
-        return call(body, token);
+        return call(body);
     }
 
     // ---- HTTP + interpretation ---------------------------------------------
 
-    private TurnResult call(ChatRequest body, String token) {
-        Map<String, String> headers = Map.of("Authorization", "Bearer " + token);
-        HttpTransport.Response r = transport.postJson(ENDPOINT, headers, gson.toJson(body));
+    private TurnResult call(ChatRequest body) {
+        String name = cfg.displayName.get();
+        Map<String, String> headers = Map.of("Authorization", "Bearer " + cfg.token.get());
+        HttpTransport.Response r = transport.postJson(cfg.endpoint.get(), headers, gson.toJson(body));
         if (r.cancelled) {
             return TurnResult.cancelled();
         }
@@ -135,23 +185,21 @@ public final class OpenAiCompatibleProvider implements AiProvider {
         }
         String apiMsg = extractError(r.body);
         if (r.status == 401 || r.status == 403) {
-            return TurnResult.error("Puter rejected the auth token (HTTP " + r.status + "). "
-                    + "Create a fresh token at puter.com/dashboard → API tokens. "
+            return TurnResult.error(name + " rejected the API key/token (HTTP " + r.status + "). "
                     + (apiMsg == null ? "" : "Details: " + apiMsg), r.status);
         }
         if (r.status == 400 && apiMsg != null && apiMsg.toLowerCase().contains("tool call")) {
-            return TurnResult.error("Puter rejected the tool-call format (HTTP 400) for this model. "
-                    + "Try a different Puter model in the Config tab (e.g. gpt-5.4-nano or gpt-5.3-chat). "
-                    + "Details: " + apiMsg, r.status);
+            return TurnResult.error(name + " rejected the tool-call format (HTTP 400) for this model. "
+                    + "Try a different model. Details: " + apiMsg, r.status);
         }
         if (r.status == 429) {
-            return TurnResult.error("Rate limited by Puter (HTTP 429). Please retry in a moment. "
+            return TurnResult.error("Rate limited by " + name + " (HTTP 429). Please retry in a moment. "
                     + (apiMsg == null ? "" : apiMsg), r.status);
         }
         if (r.status == 0) {
-            return TurnResult.error("Could not reach Puter: " + r.body, 0);
+            return TurnResult.error("Could not reach " + name + ": " + r.body, 0);
         }
-        return TurnResult.error("Puter request failed (HTTP " + r.status + "). "
+        return TurnResult.error(name + " request failed (HTTP " + r.status + "). "
                 + (apiMsg == null ? "" : apiMsg), r.status);
     }
 
@@ -160,16 +208,16 @@ public final class OpenAiCompatibleProvider implements AiProvider {
         try {
             parsed = gson.fromJson(respBody, ChatResponse.class);
         } catch (JsonSyntaxException e) {
-            return TurnResult.error("Could not parse Puter response: " + e.getMessage(), 200);
+            return TurnResult.error("Could not parse the provider response: " + e.getMessage(), 200);
         }
         if (parsed == null) {
-            return TurnResult.error("Empty Puter response.", 200);
+            return TurnResult.error("Empty response from the provider.", 200);
         }
         if (parsed.error != null && parsed.error.message != null) {
-            return TurnResult.error("Puter error: " + parsed.error.message, 200);
+            return TurnResult.error("Provider error: " + parsed.error.message, 200);
         }
         if (parsed.choices == null || parsed.choices.isEmpty() || parsed.choices.get(0).message == null) {
-            return TurnResult.error("Puter returned no choices.", 200);
+            return TurnResult.error("Provider returned no choices.", 200);
         }
 
         Choice choice = parsed.choices.get(0);

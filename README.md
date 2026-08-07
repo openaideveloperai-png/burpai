@@ -6,6 +6,8 @@ A Burp Suite extension (Java, Montoya API) that embeds an AI assistant to suppor
 - **Google Gemini** — the `generateContent` REST API with **your own API key**.
 - **Puter AI** — Puter's **OpenAI‑compatible** endpoint (proxies GPT / Claude / Gemini / Grok) with
   a **Puter auth token**.
+- **Custom** — **any** OpenAI‑compatible provider (OpenAI, OpenRouter, Groq, DeepSeek, Mistral, xAI,
+  …), auto‑configured from the [models.dev](https://models.dev) catalog with your own API key.
 
 The design is built around one rule:
 
@@ -128,6 +130,20 @@ providers starts a fresh chat session (the two wire formats aren't interchangeab
 > reasoning models like the GPT‑5.6 family), this extension represents *prior* tool exchanges as
 > plain text while still advertising the tools each turn, so the model keeps calling them. Gemini
 > (Option A) uses native structured tool calling.
+
+### Option C — Custom (any OpenAI‑compatible provider, via models.dev)
+Pick **AI provider → Custom** to use **any** OpenAI‑compatible provider — OpenAI, OpenRouter, Groq,
+DeepSeek, Mistral, xAI, Together, Fireworks, …
+
+1. Click **Refresh models (models.dev)** so the catalog loads.
+2. Choose a provider from the **models.dev provider** dropdown. The **Endpoint URL** and **Model**
+   list auto‑fill from the catalog (the key's env‑var name is shown as a hint).
+3. Paste the provider's **API key**, tweak the endpoint/model if needed, **Save**, **Test connection**.
+
+The endpoint is the provider's OpenAI‑compatible `…/chat/completions` URL and auth is a standard
+`Authorization: Bearer <key>` header. You can also set the endpoint/model by hand without picking a
+models.dev provider. (Native‑only APIs such as raw Anthropic or raw Google aren't OpenAI‑compatible —
+reach those through Gemini (Option A) or an OpenAI‑compatible gateway like OpenRouter/Puter.)
 
 > **Secrets note:** saved keys/tokens live in Burp's preferences, which are **not strongly encrypted
 > at rest**. They are never logged and never written into chat transcripts. Prefer the environment

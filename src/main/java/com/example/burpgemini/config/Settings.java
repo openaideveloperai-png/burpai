@@ -28,10 +28,16 @@ public final class Settings {
     private static final String K_PUTER_TOKEN = "burpgemini.puterToken";
     private static final String K_PUTER_MODEL = "burpgemini.puterModel";
     private static final String K_PUTER_WEBSEARCH = "burpgemini.puterWebSearch";
+    private static final String K_CUSTOM_NAME = "burpgemini.customName";
+    private static final String K_CUSTOM_ENDPOINT = "burpgemini.customEndpoint";
+    private static final String K_CUSTOM_KEY = "burpgemini.customKey";
+    private static final String K_CUSTOM_KEY_ENV = "burpgemini.customKeyEnv";
+    private static final String K_CUSTOM_MODEL = "burpgemini.customModel";
 
     /** AI provider ids. */
     public static final String PROVIDER_GEMINI = "gemini";
     public static final String PROVIDER_PUTER = "puter";
+    public static final String PROVIDER_CUSTOM = "custom";
     public static final String DEFAULT_PUTER_MODEL = "gpt-5.3-chat";
 
     /** Models offered in the Config dropdown. First entry is the default. */
@@ -151,6 +157,79 @@ public final class Settings {
 
     public void setPuterWebSearch(boolean v) {
         prefs.setBoolean(K_PUTER_WEBSEARCH, v);
+    }
+
+    // ---- Custom (any OpenAI-compatible) provider --------------------------
+
+    public String getCustomName() {
+        String n = prefs.getString(K_CUSTOM_NAME);
+        return (n == null || n.isBlank()) ? "Custom" : n;
+    }
+
+    public void setCustomName(String name) {
+        prefs.setString(K_CUSTOM_NAME, name == null ? "" : name);
+    }
+
+    /** Full chat/completions endpoint URL for the custom provider. */
+    public String getCustomEndpoint() {
+        String e = prefs.getString(K_CUSTOM_ENDPOINT);
+        return e == null ? "" : e.trim();
+    }
+
+    public void setCustomEndpoint(String url) {
+        prefs.setString(K_CUSTOM_ENDPOINT, url == null ? "" : url.trim());
+    }
+
+    public String getCustomModel() {
+        String m = prefs.getString(K_CUSTOM_MODEL);
+        return m == null ? "" : m.trim();
+    }
+
+    public void setCustomModel(String model) {
+        prefs.setString(K_CUSTOM_MODEL, model == null ? "" : model.trim());
+    }
+
+    /** Optional: the env var name holding the custom key (from models.dev), used as a fallback. */
+    public String getCustomKeyEnv() {
+        String e = prefs.getString(K_CUSTOM_KEY_ENV);
+        return e == null ? "" : e.trim();
+    }
+
+    public void setCustomKeyEnv(String envName) {
+        prefs.setString(K_CUSTOM_KEY_ENV, envName == null ? "" : envName.trim());
+    }
+
+    /** Effective custom key: the stored value, or the configured env var if set. */
+    public String getCustomKey() {
+        String stored = prefs.getString(K_CUSTOM_KEY);
+        if (stored != null && !stored.isBlank()) {
+            return stored.trim();
+        }
+        String envName = getCustomKeyEnv();
+        if (!envName.isBlank()) {
+            String v = System.getenv(envName);
+            if (v != null && !v.isBlank()) {
+                return v.trim();
+            }
+        }
+        return "";
+    }
+
+    public boolean hasCustomKey() {
+        return !getCustomKey().isBlank();
+    }
+
+    public boolean customKeyFromEnv() {
+        String stored = prefs.getString(K_CUSTOM_KEY);
+        return (stored == null || stored.isBlank()) && hasCustomKey();
+    }
+
+    public void setCustomKey(String key) {
+        if (key == null || key.isBlank()) {
+            prefs.deleteString(K_CUSTOM_KEY);
+        } else {
+            prefs.setString(K_CUSTOM_KEY, key.trim());
+        }
     }
 
     // ---- model & thinking level -------------------------------------------

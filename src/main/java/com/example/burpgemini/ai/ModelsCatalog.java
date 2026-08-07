@@ -68,12 +68,31 @@ public final class ModelsCatalog {
         }
     }
 
+    /** One provider's metadata (used to offer "pick any provider"). */
+    public static final class ProviderInfo {
+        public String id;
+        public String name;
+        public String apiBase;   // base URL, e.g. https://api.openai.com/v1
+        public String doc;       // docs URL
+        public final List<String> env = new ArrayList<>(); // API-key env var name(s)
+
+        /** Best-effort OpenAI-compatible chat/completions endpoint from the api base. */
+        public String chatEndpoint() {
+            if (apiBase == null || apiBase.isBlank()) {
+                return "";
+            }
+            String b = apiBase.endsWith("/") ? apiBase.substring(0, apiBase.length() - 1) : apiBase;
+            return b.endsWith("/chat/completions") ? b : b + "/chat/completions";
+        }
+    }
+
     private final HttpClient http = HttpClient.newBuilder()
             .connectTimeout(Duration.ofSeconds(15))
             .build();
     private final Gson gson = new Gson();
 
     private volatile List<ModelInfo> all = new ArrayList<>();
+    private volatile List<ProviderInfo> providers = new ArrayList<>();
     private volatile Map<String, ModelInfo> byId = new LinkedHashMap<>();
     private volatile boolean loaded;
 
@@ -111,6 +130,7 @@ public final class ModelsCatalog {
     private void parse(String body) {
         JsonObject root = gson.fromJson(body, JsonObject.class);
         List<ModelInfo> models = new ArrayList<>();
+        List<ProviderInfo> provs = new ArrayList<>();
         Map<String, ModelInfo> index = new LinkedHashMap<>();
         if (root != null) {
             for (Map.Entry<String, JsonElement> pe : root.entrySet()) {
@@ -120,6 +140,22 @@ public final class ModelsCatalog {
                 JsonObject provider = pe.getValue().getAsJsonObject();
                 String providerId = pe.getKey();
                 String providerName = str(provider, "name", providerId);
+
+                ProviderInfo pi = new ProviderInfo();
+                pi.id = providerId;
+                pi.name = providerName;
+                pi.apiBase = str(provider, "api", null);
+                pi.doc = str(provider, "doc", null);
+                JsonElement envEl = provider.get("env");
+                if (envEl != null && envEl.isJsonArray()) {
+                    envEl.getAsJsonArray().forEach(x -> {
+                        if (x.isJsonPrimitive()) {
+                            pi.env.add(x.getAsString());
+                        }
+                    });
+                }
+                provs.add(pi);
+
                 JsonElement modelsEl = provider.get("models");
                 if (modelsEl == null || !modelsEl.isJsonObject()) {
                     continue;
@@ -136,9 +172,27 @@ public final class ModelsCatalog {
                 }
             }
         }
+        provs.sort((x, y) -> x.name.compareToIgnoreCase(y.name));
         this.all = models;
+        this.providers = provs;
         this.byId = index;
         this.loaded = true;
+    }
+
+    public List<ProviderInfo> providers() {
+        return providers;
+    }
+
+    /** Model ids served by a given provider id, sorted. */
+    public List<String> modelIdsForProvider(String providerId) {
+        List<String> ids = new ArrayList<>();
+        for (ModelInfo mi : all) {
+            if (mi.providerId != null && mi.providerId.equals(providerId)) {
+                ids.add(mi.id);
+            }
+        }
+        ids.sort(String::compareTo);
+        return ids;
     }
 
     private static ModelInfo toModel(String key, JsonObject m, String providerId, String providerName) {
