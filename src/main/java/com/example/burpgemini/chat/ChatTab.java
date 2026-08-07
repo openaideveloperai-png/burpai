@@ -41,7 +41,7 @@ public final class ChatTab extends JPanel {
     private final Settings settings;
     private final Font displayFont;
 
-    private final JPanel conversation = new JPanel();
+    private final JPanel conversation = new WidthTrackingPanel();
     private final JScrollPane conversationScroll;
     private final JTextArea input = new JTextArea(3, 60);
     private final JButton sendButton = new JButton("Send");
@@ -85,13 +85,13 @@ public final class ChatTab extends JPanel {
         add(top, BorderLayout.NORTH);
 
         // ---- center: conversation -----------------------------------------
+        // WidthTrackingPanel makes the content wrap to the tab width (no sideways overflow); a
+        // horizontal scrollbar is still allowed as a safety net for wide inner tables.
         conversation.setLayout(new BoxLayout(conversation, BoxLayout.Y_AXIS));
         conversation.setBorder(BorderFactory.createEmptyBorder(6, 6, 6, 6));
-        JPanel convWrapper = new JPanel(new BorderLayout());
-        convWrapper.add(conversation, BorderLayout.NORTH);
-        conversationScroll = new JScrollPane(convWrapper,
+        conversationScroll = new JScrollPane(conversation,
                 ScrollPaneConstants.VERTICAL_SCROLLBAR_AS_NEEDED,
-                ScrollPaneConstants.HORIZONTAL_SCROLLBAR_NEVER);
+                ScrollPaneConstants.HORIZONTAL_SCROLLBAR_AS_NEEDED);
         conversationScroll.getVerticalScrollBar().setUnitIncrement(16);
         add(conversationScroll, BorderLayout.CENTER);
 
@@ -100,6 +100,7 @@ public final class ChatTab extends JPanel {
 
         thinking.setForeground(MessageViewColors.muted());
         thinking.setBorder(BorderFactory.createEmptyBorder(2, 10, 2, 10));
+        thinking.setAlignmentX(Component.LEFT_ALIGNMENT);
 
         ctx.setContextListener(items -> SwingUtilities.invokeLater(() -> updateContextChip(items)));
         refreshBanner();
@@ -238,7 +239,7 @@ public final class ChatTab extends JPanel {
             ToolCard card = new ToolCard(tool, argsSummary, tier, displayFont);
             card.setAlignmentX(Component.LEFT_ALIGNMENT);
             conversation.add(card);
-            conversation.add(Box.createVerticalStrut(6));
+            conversation.add(leftStrut(6));
             conversation.revalidate();
             scrollToBottom();
             return card;
@@ -365,5 +366,43 @@ public final class ChatTab extends JPanel {
             ctx.logError("EDT task failed: " + e.getCause(), e.getCause());
         }
         return ref.get();
+    }
+
+    /** A left-aligned vertical strut (so BoxLayout doesn't shift rows horizontally). */
+    private static Component leftStrut(int height) {
+        JComponent s = (JComponent) Box.createVerticalStrut(height);
+        s.setAlignmentX(Component.LEFT_ALIGNMENT);
+        return s;
+    }
+
+    /**
+     * A panel that reports it tracks the scroll viewport's width, so its BoxLayout content wraps to
+     * the available width instead of overflowing sideways.
+     */
+    private static final class WidthTrackingPanel extends JPanel implements javax.swing.Scrollable {
+        @Override
+        public Dimension getPreferredScrollableViewportSize() {
+            return getPreferredSize();
+        }
+
+        @Override
+        public int getScrollableUnitIncrement(java.awt.Rectangle visible, int orientation, int direction) {
+            return 16;
+        }
+
+        @Override
+        public int getScrollableBlockIncrement(java.awt.Rectangle visible, int orientation, int direction) {
+            return Math.max(16, visible.height - 24);
+        }
+
+        @Override
+        public boolean getScrollableTracksViewportWidth() {
+            return true;
+        }
+
+        @Override
+        public boolean getScrollableTracksViewportHeight() {
+            return false;
+        }
     }
 }

@@ -19,8 +19,11 @@ import javax.swing.JComponent;
 import javax.swing.JLabel;
 import javax.swing.JPanel;
 import javax.swing.JPasswordField;
+import javax.swing.JScrollPane;
 import javax.swing.JTextField;
+import javax.swing.ScrollPaneConstants;
 import javax.swing.SwingUtilities;
+import java.awt.BorderLayout;
 import java.awt.Color;
 import java.awt.Component;
 import java.awt.Dimension;
@@ -97,21 +100,33 @@ public final class ConfigTab extends JPanel {
         customModelBox.setEditable(true);
         mdProviderBox.addActionListener(e -> onPickModelsDevProvider());
 
-        setLayout(new BoxLayout(this, BoxLayout.Y_AXIS));
-        setBorder(BorderFactory.createEmptyBorder(14, 16, 14, 16));
+        // All settings live in a scrollable content panel so the Save/Test buttons are always
+        // reachable no matter how tall the form grows.
+        JPanel content = new JPanel();
+        content.setLayout(new BoxLayout(content, BoxLayout.Y_AXIS));
+        content.setBorder(BorderFactory.createEmptyBorder(14, 16, 14, 16));
 
-        add(title("Burp AI Assistant — Settings"));
-        add(Box.createVerticalStrut(4));
-        add(reminder("For authorized, in-scope penetration testing only. The AI proposes actions; "
-                + "you confirm; the extension executes. Nothing target-facing runs without your approval."));
-        add(Box.createVerticalStrut(12));
-        add(buildForm());
-        add(Box.createVerticalStrut(12));
-        add(buildButtons());
-        add(Box.createVerticalStrut(8));
+        content.add(title("Burp AI Assistant — Settings"));
+        content.add(Box.createVerticalStrut(4));
+        content.add(reminder("For authorized, in-scope penetration testing only. The AI proposes "
+                + "actions; you confirm; the extension executes. Nothing target-facing runs without "
+                + "your approval."));
+        content.add(Box.createVerticalStrut(12));
+        content.add(buildForm());
+        content.add(Box.createVerticalStrut(12));
+        content.add(buildButtons());
+        content.add(Box.createVerticalStrut(8));
         statusLabel.setAlignmentX(Component.LEFT_ALIGNMENT);
-        add(statusLabel);
-        add(Box.createVerticalGlue());
+        content.add(statusLabel);
+        content.add(Box.createVerticalGlue());
+
+        setLayout(new BorderLayout());
+        JScrollPane scroll = new JScrollPane(content,
+                ScrollPaneConstants.VERTICAL_SCROLLBAR_AS_NEEDED,
+                ScrollPaneConstants.HORIZONTAL_SCROLLBAR_AS_NEEDED);
+        scroll.getVerticalScrollBar().setUnitIncrement(16);
+        scroll.setBorder(null);
+        add(scroll, BorderLayout.CENTER);
 
         providerBox.addActionListener(e -> {
             updateEnabledState();
