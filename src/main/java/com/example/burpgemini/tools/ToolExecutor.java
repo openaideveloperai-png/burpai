@@ -674,8 +674,10 @@ public final class ToolExecutor {
         String source = getStr(args, "source", "proxy");
         JsonArray ids = args.has("ids") && args.get("ids").isJsonArray()
                 ? args.getAsJsonArray("ids") : new JsonArray();
-        Audit audit = api.scanner().startAudit(
-                AuditConfiguration.auditConfiguration(BuiltInAuditConfiguration.LEGACY_PASSIVE_AUDIT_CHECKS));
+        Audit audit = startAuditSafe(BuiltInAuditConfiguration.LEGACY_PASSIVE_AUDIT_CHECKS);
+        if (audit == null) {
+            return scannerUnavailable();
+        }
         int added = 0;
         for (JsonElement idEl : ids) {
             Item item = resolve(source, idEl.getAsString());
@@ -714,8 +716,10 @@ public final class ToolExecutor {
     // ------------------------------------------------------------------ Tier 3
 
     private JsonObject startActiveAudit(JsonObject args) {
-        Audit audit = api.scanner().startAudit(
-                AuditConfiguration.auditConfiguration(BuiltInAuditConfiguration.LEGACY_ACTIVE_AUDIT_CHECKS));
+        Audit audit = startAuditSafe(BuiltInAuditConfiguration.LEGACY_ACTIVE_AUDIT_CHECKS);
+        if (audit == null) {
+            return scannerUnavailable();
+        }
         String url = getStr(args, "url", null);
         String seededUrl;
         if (url != null && !url.isBlank()) {
@@ -735,6 +739,24 @@ public final class ToolExecutor {
         r.addProperty("status", audit.statusMessage());
         r.addProperty("note", "Active scan is running in the background. Watch Burp's Dashboard / "
                 + "Scanner for progress and issues; it may generate many requests.");
+        return r;
+    }
+
+    /** Start an audit, tolerating editions/versions without a Scanner (returns null on failure). */
+    private Audit startAuditSafe(BuiltInAuditConfiguration cfg) {
+        try {
+            return api.scanner().startAudit(AuditConfiguration.auditConfiguration(cfg));
+        } catch (Throwable t) {
+            ctx.logError("Scanner audit unavailable: " + t);
+            return null;
+        }
+    }
+
+    private JsonObject scannerUnavailable() {
+        JsonObject r = new JsonObject();
+        r.addProperty("error", "Burp's Scanner isn't available in this edition (Burp Community has no "
+                + "Scanner). Skip the audit and rely on passive analysis of captured traffic, "
+                + "fetch_url / fetch_common_paths for recon, and send_http_request for targeted tests.");
         return r;
     }
 

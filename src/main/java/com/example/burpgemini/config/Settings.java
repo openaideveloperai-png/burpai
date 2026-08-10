@@ -150,6 +150,52 @@ public final class Settings {
         prefs.setString(K_PUTER_MODEL, model);
     }
 
+    // ---- appearance (backgrounds) -----------------------------------------
+
+    public String getAppearanceStyle() {
+        String s = prefs.getString("burpgemini.appStyle");
+        return s == null ? "AURORA" : s;
+    }
+
+    public void setAppearanceStyle(String s) {
+        prefs.setString("burpgemini.appStyle", s);
+    }
+
+    public int getAppearanceBaseRgb() {
+        Integer v = prefs.getInteger("burpgemini.appBase");
+        return v == null ? 0x0B1E3B : v;
+    }
+
+    public void setAppearanceBaseRgb(int rgb) {
+        prefs.setInteger("burpgemini.appBase", rgb);
+    }
+
+    public int getAppearanceAccentRgb() {
+        Integer v = prefs.getInteger("burpgemini.appAccent");
+        return v == null ? 0x3AA0FF : v;
+    }
+
+    public void setAppearanceAccentRgb(int rgb) {
+        prefs.setInteger("burpgemini.appAccent", rgb);
+    }
+
+    public int getAppearanceSpeedX10() {
+        Integer v = prefs.getInteger("burpgemini.appSpeed");
+        return v == null ? 10 : v;
+    }
+
+    public void setAppearanceSpeedX10(int v) {
+        prefs.setInteger("burpgemini.appSpeed", v);
+    }
+
+    public boolean isAppearanceApplied() {
+        return boolOrDefault("burpgemini.appApplied", false);
+    }
+
+    public void setAppearanceApplied(boolean v) {
+        prefs.setBoolean("burpgemini.appApplied", v);
+    }
+
     /** Enable Puter's built-in web_search tool for OpenAI models. Default ON. */
     public boolean isPuterWebSearch() {
         return boolOrDefault(K_PUTER_WEBSEARCH, true);

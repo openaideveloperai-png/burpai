@@ -65,6 +65,10 @@ Both providers are called directly with **your own key/token** — it does **not
 - **Model specs from [models.dev](https://models.dev)** — the Config tab can load up‑to‑date model
   metadata (context window, input/output pricing, tool‑call & reasoning support) to populate the
   model dropdowns and show a one‑line spec for the selected model.
+- **🎨 AI Appearance tab** — animated backgrounds (aurora, starfield, matrix rain, bubbles, plasma,
+  gradient, or a custom image) with readable, contrast‑checked controls; optionally **re‑theme all
+  of Burp** to match (every tab's colours adapt, text stays legible), with a **Reset to normal Burp**
+  button that restores the default theme.
 - **Scope enforcement** — out‑of‑scope target traffic is blocked by default; overriding requires an
   explicit setting *and* a per‑action checkbox.
 - **No arbitrary shell/OS tool** — the model can only affect a target through the mediated HTTP/Burp
@@ -103,8 +107,9 @@ bundled.
 1. **Extensions → Installed → Add.**
 2. **Extension type:** Java.
 3. Select `build/libs/burp-gemini-assistant.jar`.
-4. Three tabs appear: **AI Assistant** (chat), **AI Recon** (live passive findings + endpoint
-   inventory), and **AI Assistant Config** (settings).
+4. Four tabs appear: **AI Assistant** (chat), **AI Recon** (live passive findings + endpoint
+   inventory), **AI Appearance** (animated backgrounds + Burp re‑theme), and **AI Assistant Config**
+   (settings).
 
 ---
 

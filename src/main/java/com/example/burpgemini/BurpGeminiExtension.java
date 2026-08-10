@@ -10,6 +10,8 @@ import com.example.burpgemini.ai.AiProvider;
 import com.example.burpgemini.ai.GeminiProvider;
 import com.example.burpgemini.ai.ModelsCatalog;
 import com.example.burpgemini.ai.OpenAiCompatibleProvider;
+import com.example.burpgemini.appearance.AppearanceTab;
+import com.example.burpgemini.appearance.BurpThemer;
 import com.example.burpgemini.chat.ChatController;
 import com.example.burpgemini.chat.ChatTab;
 import com.example.burpgemini.config.ConfigTab;
@@ -85,9 +87,13 @@ public final class BurpGeminiExtension implements BurpExtension {
         ConfigTab configTab = new ConfigTab(ctx, settings, providers, catalog);
         configTab.setChatTab(chatTab);
 
+        BurpThemer themer = new BurpThemer();
+        AppearanceTab appearanceTab = new AppearanceTab(ctx, settings, themer);
+
         // Register suite tabs.
         api.userInterface().registerSuiteTab("AI Assistant", chatTab);
         api.userInterface().registerSuiteTab("AI Recon", reconTab);
+        api.userInterface().registerSuiteTab("AI Appearance", appearanceTab);
         api.userInterface().registerSuiteTab("AI Assistant Config", configTab);
 
         // "Send to AI Assistant" context menu across Proxy/Repeater/Target/Intruder/browser.
@@ -98,6 +104,7 @@ public final class BurpGeminiExtension implements BurpExtension {
             try {
                 controller.cancelCurrentTurn();
                 enricher.stop();
+                themer.reset(); // don't leave Burp re-themed after we unload
             } finally {
                 ctx.shutdown();
             }
