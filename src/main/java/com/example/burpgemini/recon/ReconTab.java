@@ -107,6 +107,10 @@ public final class ReconTab extends JPanel {
                         + "(least-intrusive tests first).");
             }
         });
+        JButton export = new JButton("Export report");
+        export.setToolTipText("Save the collected findings + recon as a Markdown report.");
+        export.addActionListener(e -> exportReport());
+
         JButton clear = new JButton("Clear");
         clear.addActionListener(e -> {
             store.clear();
@@ -114,8 +118,85 @@ public final class ReconTab extends JPanel {
         });
         bar.add(analyze);
         bar.add(Box.createHorizontalStrut(6));
+        bar.add(export);
+        bar.add(Box.createHorizontalStrut(6));
         bar.add(clear);
         return bar;
+    }
+
+    private void exportReport() {
+        javax.swing.JFileChooser chooser = new javax.swing.JFileChooser();
+        chooser.setDialogTitle("Export recon report (Markdown)");
+        chooser.setSelectedFile(new java.io.File("burp-ai-recon-report.md"));
+        if (chooser.showSaveDialog(this) != javax.swing.JFileChooser.APPROVE_OPTION) {
+            return;
+        }
+        java.io.File file = chooser.getSelectedFile();
+        try {
+            java.nio.file.Files.writeString(file.toPath(), buildMarkdown());
+            summary.setText("Report saved to " + file.getAbsolutePath());
+        } catch (java.io.IOException ex) {
+            javax.swing.JOptionPane.showMessageDialog(this, "Could not write report:\n" + ex.getMessage(),
+                    "Export failed", javax.swing.JOptionPane.ERROR_MESSAGE);
+        }
+    }
+
+    private String buildMarkdown() {
+        StringBuilder md = new StringBuilder();
+        md.append("# Burp AI Assistant — Recon Report\n\n");
+        md.append("_Generated: ").append(java.time.ZonedDateTime.now()).append("_\n\n");
+        md.append("## Summary\n\n");
+        md.append("- Endpoints: ").append(store.endpointCount()).append('\n');
+        md.append("- Findings: ").append(store.findingCount()).append('\n');
+        md.append("- Parameters: ").append(info.paramCount()).append('\n');
+        md.append("- Secrets/tokens: ").append(info.secretCount()).append("\n\n");
+
+        md.append("## Findings\n\n");
+        md.append("| Severity | Count | Type | URL | Evidence |\n|---|---|---|---|---|\n");
+        for (PassiveFinding f : store.findingsSnapshot()) {
+            md.append("| ").append(f.severity).append(" | ").append(f.occurrences).append(" | ")
+              .append(cell(f.type)).append(" | ").append(cell(f.url)).append(" | ")
+              .append(cell(f.evidence)).append(" |\n");
+        }
+
+        md.append("\n## Endpoints\n\n| URL | Methods | Statuses | Hits |\n|---|---|---|---|\n");
+        for (FindingsStore.EndpointInfo e : store.endpointsSnapshot()) {
+            md.append("| ").append(cell(e.sampleUrl)).append(" | ").append(String.join(",", e.methods))
+              .append(" | ").append(join(e.statuses)).append(" | ").append(e.hits.get()).append(" |\n");
+        }
+
+        md.append("\n## Parameters\n\n| Name | Types | Sample values | #Endpoints | Hits |\n|---|---|---|---|---|\n");
+        for (InfoStore.Param p : info.paramsSnapshot()) {
+            md.append("| ").append(cell(p.name)).append(" | ").append(String.join(",", p.types))
+              .append(" | ").append(cell(String.join(" \u007c ", p.samples))).append(" | ")
+              .append(p.endpoints.size()).append(" | ").append(p.count.get()).append(" |\n");
+        }
+
+        md.append("\n## Secrets / Tokens (masked)\n\n| Kind | Value | #Seen | Sample URL |\n|---|---|---|---|\n");
+        for (InfoStore.Secret s : info.secretsSnapshot()) {
+            String url = s.urls.isEmpty() ? "" : s.urls.iterator().next();
+            md.append("| ").append(cell(s.kind)).append(" | ").append(cell(s.masked)).append(" | ")
+              .append(s.urls.size()).append(" | ").append(cell(url)).append(" |\n");
+        }
+
+        md.append("\n## Technologies\n\n");
+        for (String t : info.technologies()) {
+            md.append("- ").append(t).append('\n');
+        }
+        md.append("\n## Hosts\n\n");
+        for (String h : info.hosts()) {
+            md.append("- ").append(h).append('\n');
+        }
+        md.append("\n---\n_For authorized, in-scope testing only._\n");
+        return md.toString();
+    }
+
+    /** Escape a value for a Markdown table cell. */
+    private static String cell(String s) {
+        if (s == null) {
+            return "";
+        }
+        return s.replace("|", "\\|").replace("\n", " ").replace("\r", " ");
     }
 
     private void refresh() {

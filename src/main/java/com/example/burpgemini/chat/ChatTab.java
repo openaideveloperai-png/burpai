@@ -55,6 +55,9 @@ public final class ChatTab extends JPanel {
 
     private ChatController controller;
 
+    private final StringBuilder transcript = new StringBuilder();
+    private volatile String lastReply = "";
+
     public ChatTab(BurpContext ctx, Settings settings) {
         this.ctx = ctx;
         this.settings = settings;
@@ -156,11 +159,24 @@ public final class ChatTab extends JPanel {
             }
             clearConversation();
         });
+        JButton copyChat = new JButton("Copy chat");
+        copyChat.setAlignmentX(Component.CENTER_ALIGNMENT);
+        copyChat.setToolTipText("Copy the whole conversation to the clipboard.");
+        copyChat.addActionListener(e -> copyToClipboard(transcript.toString(), "conversation"));
+        JButton copyReply = new JButton("Copy reply");
+        copyReply.setAlignmentX(Component.CENTER_ALIGNMENT);
+        copyReply.setToolTipText("Copy the AI's last reply to the clipboard.");
+        copyReply.addActionListener(e -> copyToClipboard(lastReply, "last reply"));
+
         buttons.add(sendButton);
         buttons.add(Box.createVerticalStrut(4));
         buttons.add(cancelButton);
         buttons.add(Box.createVerticalStrut(4));
         buttons.add(clearButton);
+        buttons.add(Box.createVerticalStrut(4));
+        buttons.add(copyChat);
+        buttons.add(Box.createVerticalStrut(4));
+        buttons.add(copyReply);
 
         panel.add(inputScroll, BorderLayout.CENTER);
         panel.add(buttons, BorderLayout.EAST);
@@ -222,15 +238,23 @@ public final class ChatTab extends JPanel {
     // ---- public API used by the controller (thread-safe) -------------------
 
     public void addUserMessage(String text) {
+        appendTranscript("You", text);
         addRow(() -> MessageView.user(text, displayFont));
     }
 
     public void addAssistantMessage(String text) {
+        appendTranscript("AI", text);
+        lastReply = text;
         addRow(() -> MessageView.assistant(text, displayFont));
     }
 
     public void addNotice(String text) {
+        appendTranscript("System", text);
         addRow(() -> MessageView.notice(text, displayFont));
+    }
+
+    private synchronized void appendTranscript(String role, String text) {
+        transcript.append(role).append(": ").append(text).append("\n\n");
     }
 
     /** Create and append a tool card, returning the handle for later state updates. */
@@ -272,12 +296,30 @@ public final class ChatTab extends JPanel {
     }
 
     public void clearConversation() {
+        synchronized (this) {
+            transcript.setLength(0);
+        }
+        lastReply = "";
         SwingUtilities.invokeLater(() -> {
             conversation.removeAll();
             conversation.revalidate();
             conversation.repaint();
             addNotice("New session.");
         });
+    }
+
+    private void copyToClipboard(String text, String what) {
+        if (text == null || text.isBlank()) {
+            addNotice("Nothing to copy (" + what + " is empty).");
+            return;
+        }
+        try {
+            java.awt.Toolkit.getDefaultToolkit().getSystemClipboard()
+                    .setContents(new java.awt.datatransfer.StringSelection(text), null);
+            addNotice("Copied the " + what + " to the clipboard.");
+        } catch (RuntimeException e) {
+            addNotice("Could not copy to clipboard: " + e.getMessage());
+        }
     }
 
     public void refreshBanner() {
@@ -313,15 +355,22 @@ public final class ChatTab extends JPanel {
             contextChip.setVisible(false);
             return;
         }
-        String label;
-        if (items.size() == 1) {
-            HttpRequestResponse only = items.get(0);
-            String url = only.request() != null ? only.request().url() : "(request)";
-            label = "📎 context attached: " + url;
-        } else {
-            label = "📎 context attached: " + items.size() + " requests";
-        }
+        String first = items.get(0).request() != null ? items.get(0).request().url() : "(request)";
+        String label = items.size() == 1
+                ? "📎 context: " + first
+                : "📎 context: " + items.size() + " requests — " + first
+                    + " (+" + (items.size() - 1) + " more)";
         contextChipLabel.setText(label);
+        // Tooltip lists every attached request.
+        StringBuilder tip = new StringBuilder("<html>");
+        for (int i = 0; i < items.size() && i < 30; i++) {
+            HttpRequestResponse rr = items.get(i);
+            String m = rr.request() != null ? rr.request().method() : "?";
+            String u = rr.request() != null ? rr.request().url() : "";
+            tip.append(m).append(' ').append(escapeHtml(u)).append("<br>");
+        }
+        tip.append("</html>");
+        contextChipLabel.setToolTipText(tip.toString());
         contextChip.setVisible(true);
     }
 
@@ -366,6 +415,10 @@ public final class ChatTab extends JPanel {
             ctx.logError("EDT task failed: " + e.getCause(), e.getCause());
         }
         return ref.get();
+    }
+
+    private static String escapeHtml(String s) {
+        return s == null ? "" : s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;");
     }
 
     /** A left-aligned vertical strut (so BoxLayout doesn't shift rows horizontally). */

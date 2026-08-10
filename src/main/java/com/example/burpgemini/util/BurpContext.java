@@ -61,6 +61,31 @@ public final class BurpContext {
         }
     }
 
+    /** Append items to the current context, de-duplicating by request signature (accumulate). */
+    public void addContextItems(List<HttpRequestResponse> items) {
+        if (items == null || items.isEmpty()) {
+            return;
+        }
+        List<HttpRequestResponse> merged = new ArrayList<>(contextItems);
+        java.util.Set<String> seen = new java.util.HashSet<>();
+        for (HttpRequestResponse rr : merged) {
+            seen.add(sig(rr));
+        }
+        for (HttpRequestResponse rr : items) {
+            if (rr != null && seen.add(sig(rr))) {
+                merged.add(rr);
+            }
+        }
+        setContextItems(merged);
+    }
+
+    private static String sig(HttpRequestResponse rr) {
+        if (rr == null || rr.request() == null) {
+            return "id" + System.identityHashCode(rr);
+        }
+        return rr.request().method() + " " + rr.request().url() + " #" + rr.request().toString().length();
+    }
+
     public void clearContextItems() {
         setContextItems(new ArrayList<>());
     }

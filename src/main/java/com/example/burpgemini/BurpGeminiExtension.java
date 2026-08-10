@@ -91,7 +91,7 @@ public final class BurpGeminiExtension implements BurpExtension {
         api.userInterface().registerSuiteTab("AI Assistant Config", configTab);
 
         // "Send to AI Assistant" context menu across Proxy/Repeater/Target/Intruder/browser.
-        api.userInterface().registerContextMenuItemsProvider(new SendToAssistantMenu());
+        api.userInterface().registerContextMenuItemsProvider(new SendToAssistantMenu(controller));
 
         // Clean shutdown: cancel work + stop the thread pool on unload.
         api.extension().registerUnloadingHandler(() -> {
@@ -108,23 +108,54 @@ public final class BurpGeminiExtension implements BurpExtension {
                 + "'AI Assistant Config' tab. For authorized, in-scope testing only.");
     }
 
-    /** Provides the right-click action that attaches selected requests to the chat as context. */
+    /** Provides the right-click actions that attach selected requests to the chat as context. */
     private final class SendToAssistantMenu implements ContextMenuItemsProvider {
+        private final ChatController controller;
+
+        SendToAssistantMenu(ChatController controller) {
+            this.controller = controller;
+        }
+
         @Override
         public List<Component> provideMenuItems(ContextMenuEvent event) {
             List<HttpRequestResponse> selected = collect(event);
             if (selected.isEmpty()) {
                 return List.of();
             }
-            JMenuItem item = new JMenuItem(selected.size() == 1
-                    ? "Send to AI Assistant"
-                    : "Send " + selected.size() + " requests to AI Assistant");
-            item.addActionListener(e -> {
-                ctx.setContextItems(selected);
-                ctx.logInfo("Attached " + selected.size() + " item(s) to the AI Assistant as context. "
-                        + "Open the 'AI Assistant' tab to ask about them.");
+            int n = selected.size();
+            String suffix = n == 1 ? "" : " (" + n + ")";
+
+            // Accumulate: append to the existing context so you can send several things over time.
+            JMenuItem add = new JMenuItem("Add to AI Assistant context" + suffix);
+            add.addActionListener(e -> {
+                ctx.addContextItems(selected);
+                ctx.logInfo("Added " + n + " item(s) to the AI context (now "
+                        + ctx.contextItems().size() + " total).");
             });
-            return List.of(item);
+
+            // Replace the whole context with just this selection.
+            JMenuItem replace = new JMenuItem("Set as AI context (replace)" + suffix);
+            replace.addActionListener(e -> ctx.setContextItems(selected));
+
+            // One-click: attach + ask a canned question.
+            JMenuItem analyze = new JMenuItem("Analyze with AI" + suffix);
+            analyze.addActionListener(e -> {
+                ctx.addContextItems(selected);
+                controller.submitUserMessage("Analyze the attached request(s) for vulnerabilities. "
+                        + "If a selected item has no response, fetch it with send_http_request first. "
+                        + "Report each finding with confidence, severity and evidence, then propose the "
+                        + "smallest safe test to confirm the most promising issue.");
+            });
+
+            JMenuItem explain = new JMenuItem("Explain this request/response with AI" + suffix);
+            explain.addActionListener(e -> {
+                ctx.addContextItems(selected);
+                controller.submitUserMessage("Explain what the attached request(s) and response(s) do, "
+                        + "step by step, and flag anything security-relevant (auth, tokens, parameters, "
+                        + "sensitive data, misconfigurations).");
+            });
+
+            return List.of(add, replace, analyze, explain);
         }
 
         private List<HttpRequestResponse> collect(ContextMenuEvent event) {

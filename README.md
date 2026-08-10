@@ -29,8 +29,11 @@ Both providers are called directly with **your own key/token** — it does **not
 - **Chat tab ("AI Assistant")** — talk to Gemini about captured traffic; it analyses requests and
   responses for likely vulnerability classes with an explicit *confidence* and *severity* for each
   finding.
-- **Right‑click → "Send to AI Assistant"** in Proxy, Repeater, Target, Intruder, and the embedded
-  browser — attaches the selected request(s) as context.
+- **Right‑click context actions** in Proxy, Repeater, Target, Intruder, and the embedded browser —
+  **Add to AI Assistant context** (accumulate multiple requests over time), **Set as AI context
+  (replace)**, and one‑click **Analyze with AI** / **Explain this request/response with AI**. The
+  chat shows a chip with the attached count (hover to list them).
+- **Copy chat / Copy reply** buttons, and **Export report** (Markdown) from the AI Recon tab.
 - **Proactive agent loop** — the model actively drives Burp: recon (history/site map/search),
   passive audits, fetching live responses via `send_http_request`, and crafting the smallest safe
   active test to confirm an issue. **Quick‑action** buttons kick off common tasks in one click.
@@ -175,8 +178,9 @@ When a safety toggle is relaxed, a persistent warning banner appears at the top 
 ## Usage walkthrough
 
 1. **Set your key** in the Config tab (above).
-2. In **Proxy → HTTP history** (or Repeater/Target/Intruder), right‑click a request →
-   **Send to AI Assistant**. A *"context attached"* chip appears in the chat tab.
+2. In **Proxy → HTTP history** (or Repeater/Target/Intruder), right‑click one or more requests →
+   **Add to AI Assistant context** (repeat to attach several), or **Analyze with AI** /
+   **Explain … with AI** to attach and ask in one click. A context chip shows the attached count.
 3. Open the **AI Assistant** tab and ask, e.g.
    *"Check this login request for auth bypass"* or *"Is the `id` parameter vulnerable to IDOR?"*
    Press **Send** (or Ctrl/Cmd+Enter). Or use a **quick action** button —
