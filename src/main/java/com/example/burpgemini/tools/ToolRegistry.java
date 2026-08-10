@@ -86,6 +86,14 @@ public final class ToolRegistry {
                         p("limit", intType("Max parameters to return (default 200)."))
                 ), req())));
 
+        d.add(new ToolSpec("extract_from_captured",
+                "Mine an already-captured response (no new traffic) for links, script/JS URLs, API "
+                        + "endpoints, HTML/JS comments, forms, emails and likely secrets. Read-only.",
+                obj(props(
+                        p("source", enumType("Where the id comes from.", "proxy", "sitemap", "selection")),
+                        p("id", strType("Item id whose response body to analyze."))
+                ), req("source", "id"))));
+
         d.add(new ToolSpec("decode_transform",
                 "Locally decode/encode a string (no target traffic). JWT decode is non-verifying, header/payload only.",
                 obj(props(
@@ -140,6 +148,16 @@ public final class ToolRegistry {
                         p("modifications", mutationArray())
                 ), req())));
 
+        d.add(new ToolSpec("fetch_url",
+                "Fetch a single in-scope URL (default GET) and return the response plus extracted "
+                        + "links, JS/asset URLs, API endpoints, comments, forms, emails and likely "
+                        + "secrets. Requires confirmation (sends one request).",
+                obj(props(
+                        p("url", strType("Absolute URL to fetch (e.g. https://app.example.com/robots.txt).")),
+                        p("method", enumType("HTTP method (default GET).", "GET", "POST", "HEAD", "OPTIONS")),
+                        p("max_body_bytes", intType("Truncate the returned body to this many bytes (default 8000)."))
+                ), req("url"))));
+
         d.add(new ToolSpec("start_passive_audit",
                 "Run Burp's passive checks over the given captured items and return discovered issues. Requires confirmation.",
                 obj(props(
@@ -156,6 +174,17 @@ public final class ToolRegistry {
                         p("source", enumType("Where the id comes from.", "proxy", "sitemap", "selection")),
                         p("url", strType("Alternatively, a URL to seed a fresh request for the audit."))
                 ), req())));
+
+        d.add(new ToolSpec("fetch_common_paths",
+                "Probe a curated list of common recon/misconfiguration paths (robots.txt, sitemap.xml, "
+                        + "/.well-known/security.txt, /.git/HEAD, /.env, /actuator, swagger/openapi, "
+                        + "/graphql, admin/login, backups, …) on a base URL. Sends many requests — "
+                        + "requires strong confirmation. Optionally override the path list.",
+                obj(props(
+                        p("base_url", strType("Target base URL, e.g. https://app.example.com")),
+                        p("paths", arrayOf(strType("A path to probe, e.g. /robots.txt."),
+                                "Optional custom path list (defaults to the built-in recon list)."))
+                ), req("base_url"))));
 
         d.add(new ToolSpec("run_request_sequence",
                 "Send a SERIES of crafted requests (e.g. iterate an object id to probe IDOR/BOLA). "

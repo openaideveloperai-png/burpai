@@ -34,9 +34,17 @@ Both providers are called directly with **your own key/token** — it does **not
   (replace)**, and one‑click **Analyze with AI** / **Explain this request/response with AI**. The
   chat shows a chip with the attached count (hover to list them).
 - **Copy chat / Copy reply** buttons, and **Export report** (Markdown) from the AI Recon tab.
+- **🤖 Auto‑hunt (autonomous assessment)** — one click turns the AI loose on an in‑scope target:
+  it fetches `robots.txt` / `sitemap.xml` / `/.well-known/security.txt`, probes common
+  misconfig/exposure paths (`.git`, `.env`, `/actuator`, swagger/openapi, `/graphql`, admin, backups),
+  fetches the page + its JavaScript and **mines the HTML/JS** for endpoints, hard‑coded secrets and
+  revealing comments, reasons about vulnerability classes, and proves the most promising issues with
+  the smallest safe test — reporting findings as it goes. (Enable **⚡ Agent mode** for a fully
+  hands‑off run.)
 - **Proactive agent loop** — the model actively drives Burp: recon (history/site map/search),
-  passive audits, fetching live responses via `send_http_request`, and crafting the smallest safe
-  active test to confirm an issue. **Quick‑action** buttons kick off common tasks in one click.
+  fetching pages/JS and extracting artifacts, passive audits, fetching live responses via
+  `send_http_request`, and crafting the smallest safe active test to confirm an issue.
+  **Quick‑action** buttons kick off common tasks in one click.
 - **Risk tiering + confirmation cards** — Tier 0 (read‑only) runs automatically; Tier 1–3 render an
   Approve/Deny card showing the target, scope status, a request **diff** (or request count/sample),
   the risk tier, and the model's rationale. Tier 3 is **always** confirmed, even if the global
@@ -216,10 +224,10 @@ and `get_passive_findings`, prioritise everything, and suggest next steps. Toggl
 
 | Tool | Tier | Notes |
 |---|---|---|
-| `list_proxy_history`, `get_request_response`, `get_site_map`, `get_selected_items`, `search_traffic`, `get_scope`, `get_passive_findings`, `get_recon_data`, `decode_transform` | **0 — auto** | Read‑only / local. No dialog. `get_recon_data` returns the gathered parameter/secret/header/cookie/tech inventory; `get_passive_findings` returns the deduplicated findings. |
+| `list_proxy_history`, `get_request_response`, `get_site_map`, `get_selected_items`, `search_traffic`, `get_scope`, `get_passive_findings`, `get_recon_data`, `extract_from_captured`, `decode_transform` | **0 — auto** | Read‑only / local. No dialog. `get_recon_data` returns the gathered parameter/secret/header/cookie/tech inventory; `extract_from_captured` mines an already‑captured response for links/JS/endpoints/secrets. |
 | `send_to_repeater`, `add_to_scope`, `remove_from_scope`, `send_to_intruder` | **1 — confirm** | Stage in a Burp tool / edit scope. No new target traffic. Intruder is staged (Burp's API can't auto‑start an attack); set payloads and start it manually. |
-| `send_http_request`, `start_passive_audit` | **2 — confirm + warning** | Sends one request / runs passive checks. Card shows a request **diff**. |
-| `start_active_audit`, `run_request_sequence` | **3 — confirm + strong warning** | Active scan / a series of crafted requests. Card shows the count and a sample; **always** confirmed. |
+| `send_http_request`, `start_passive_audit`, `fetch_url` | **2 — confirm + warning** | Sends one request / runs passive checks. `fetch_url` fetches a URL and auto‑extracts links/JS/endpoints/secrets. |
+| `start_active_audit`, `run_request_sequence`, `fetch_common_paths` | **3 — confirm + strong warning** | Active scan / a series of requests / probing many recon paths. Card shows the count and a sample; **always** confirmed. |
 
 Unknown/unmapped tools default to Tier 3 (fail safe).
 

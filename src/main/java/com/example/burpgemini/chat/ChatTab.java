@@ -189,6 +189,14 @@ public final class ChatTab extends JPanel {
         bar.setBorder(BorderFactory.createEmptyBorder(0, 0, 4, 0));
 
         bar.add(new JLabel("Quick actions: "));
+        JButton auto = new JButton("🤖 Auto-hunt");
+        auto.setMargin(new java.awt.Insets(2, 6, 2, 6));
+        auto.setFont(auto.getFont().deriveFont(java.awt.Font.BOLD, auto.getFont().getSize() - 1f));
+        auto.setToolTipText("Autonomously assess an in-scope target: recon, misconfig probing, "
+                + "HTML/JS mining, and vuln hunting.");
+        auto.addActionListener(e -> onAutoHunt());
+        bar.add(auto);
+        bar.add(Box.createHorizontalStrut(4));
         bar.add(quickButton("🔍 Passive recon",
                 "Do passive reconnaissance on the in-scope target(s): call list_proxy_history and "
                 + "get_site_map to map endpoints, search_traffic for interesting keywords (token, "
@@ -209,6 +217,80 @@ public final class ChatTab extends JPanel {
                 + "gap with severity."));
         bar.add(Box.createHorizontalGlue());
         return bar;
+    }
+
+    private static final String AUTO_HUNT_PROMPT = """
+Run an AUTONOMOUS security assessment of %s (authorized, in-scope). Work end-to-end using your tools,
+reporting findings as you go. Prefer the least-intrusive test first; respect scope; if a step is
+denied, adapt.
+
+1. RECON: call get_recon_data and get_passive_findings for what's already collected. Then fetch_url
+   %s/robots.txt, %s/sitemap.xml and %s/.well-known/security.txt. Run fetch_common_paths on %s to
+   find exposed/misconfigured paths (.git, .env, actuator, swagger/openapi, graphql, backups,
+   admin/login).
+2. MAP THE APP: fetch_url the main page, review the extracted links/scripts/endpoints, then fetch_url
+   the key JavaScript files and mine them for API endpoints, hard-coded secrets/keys, tokens and
+   revealing comments. Use extract_from_captured on anything already in the proxy history.
+3. ANALYZE: for each interesting endpoint/parameter reason about injection (SQLi/command/template),
+   access control (IDOR/BOLA/function-level), auth/session weaknesses, SSRF, XXE, CORS and security
+   headers, sensitive-data exposure, secrets in JS, and verbose errors. Ground every claim in
+   evidence with CONFIDENCE (Confirmed/Likely/Speculative) and SEVERITY (Info/Low/Med/High/Critical).
+4. PROVE: confirm the most promising issues with the smallest safe send_http_request (or
+   run_request_sequence to iterate an id for IDOR). Consider start_passive_audit on captured items;
+   only propose start_active_audit with a clear warning.
+5. Finish with a PRIORITISED summary of confirmed/likely issues and concrete next steps.
+""";
+
+    private void onAutoHunt() {
+        if (controller == null) {
+            return;
+        }
+        String def = guessTargetBaseUrl();
+        Object input = javax.swing.JOptionPane.showInputDialog(this,
+                "Target base URL to assess (authorized, in-scope only):",
+                "Auto-hunt", javax.swing.JOptionPane.QUESTION_MESSAGE, null, null, def);
+        if (input == null) {
+            return;
+        }
+        String url = input.toString().trim();
+        if (url.isEmpty()) {
+            return;
+        }
+        if (!settings.isAutoApprove()) {
+            addNotice("Auto-hunt started on " + url + ". Active steps will ask for your approval — "
+                    + "enable ⚡ Agent mode in Config for a fully hands-off run.");
+        } else {
+            addNotice("Auto-hunt started on " + url + " (⚡ Agent mode: running hands-off).");
+        }
+        controller.submitUserMessage(String.format(AUTO_HUNT_PROMPT, url, url, url, url, url));
+    }
+
+    /** Best-effort default target: the attached context host, else the first in-scope proxy host. */
+    private String guessTargetBaseUrl() {
+        try {
+            List<HttpRequestResponse> items = ctx.contextItems();
+            if (!items.isEmpty() && items.get(0).request() != null) {
+                return baseOf(items.get(0).request().url());
+            }
+            for (var h : ctx.api().proxy().history()) {
+                String u = h.request() != null ? h.request().url() : null;
+                if (u != null && ctx.api().scope().isInScope(u)) {
+                    return baseOf(u);
+                }
+            }
+        } catch (RuntimeException ignored) {
+            // fall through
+        }
+        return "";
+    }
+
+    private static String baseOf(String url) {
+        try {
+            java.net.URI u = java.net.URI.create(url);
+            return u.getScheme() + "://" + u.getAuthority();
+        } catch (RuntimeException e) {
+            return url;
+        }
     }
 
     private JButton quickButton(String label, String prompt) {

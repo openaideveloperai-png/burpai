@@ -65,6 +65,7 @@ public enum RiskTier {
         BY_TOOL.put("get_scope", TIER0_AUTO);
         BY_TOOL.put("get_passive_findings", TIER0_AUTO);
         BY_TOOL.put("get_recon_data", TIER0_AUTO);
+        BY_TOOL.put("extract_from_captured", TIER0_AUTO);
         BY_TOOL.put("decode_transform", TIER0_AUTO);
 
         // Tier 1 — confirm, no new target traffic (staging only).
@@ -78,10 +79,12 @@ public enum RiskTier {
         // Tier 2 — confirm + warning, sends traffic to the target.
         BY_TOOL.put("send_http_request", TIER2_CONFIRM_WARN);
         BY_TOOL.put("start_passive_audit", TIER2_CONFIRM_WARN);
+        BY_TOOL.put("fetch_url", TIER2_CONFIRM_WARN);
 
         // Tier 3 — confirm + strong warning, active / high-volume / stateful.
         BY_TOOL.put("start_active_audit", TIER3_CONFIRM_STRONG);
         BY_TOOL.put("run_request_sequence", TIER3_CONFIRM_STRONG);
+        BY_TOOL.put("fetch_common_paths", TIER3_CONFIRM_STRONG);
     }
 
     /** Unknown tools default to the strongest gate: fail safe, never fail open. */

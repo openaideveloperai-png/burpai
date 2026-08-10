@@ -18,6 +18,7 @@ import com.example.burpgemini.recon.FindingsStore;
 import com.example.burpgemini.recon.InfoStore;
 import com.example.burpgemini.recon.PassiveFinding;
 import com.example.burpgemini.util.BurpContext;
+import com.example.burpgemini.util.ContentExtractor;
 import com.example.burpgemini.util.TextDiff;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
@@ -83,6 +84,12 @@ public final class ToolExecutor {
                     return getPassiveFindings(args);
                 case "get_recon_data":
                     return getReconData(args);
+                case "extract_from_captured":
+                    return extractFromCaptured(args);
+                case "fetch_url":
+                    return fetchUrl(args);
+                case "fetch_common_paths":
+                    return fetchCommonPaths(args);
                 case "decode_transform":
                     return decodeTransform(args);
                 case "send_to_repeater":
@@ -776,6 +783,134 @@ public final class ToolExecutor {
         return r;
     }
 
+    // ------------------------------------------------------------------ recon: fetch & extract
+
+    /** Curated list of interesting recon / misconfiguration paths. */
+    private static final String[] RECON_PATHS = {
+            "/robots.txt", "/sitemap.xml", "/.well-known/security.txt", "/security.txt",
+            "/.git/HEAD", "/.git/config", "/.env", "/.env.local", "/.env.production",
+            "/config.json", "/config.js", "/app.config.js", "/package.json", "/composer.json",
+            "/yarn.lock", "/Dockerfile", "/docker-compose.yml", "/.DS_Store", "/.htaccess",
+            "/web.config", "/crossdomain.xml", "/clientaccesspolicy.xml", "/server-status",
+            "/server-info", "/actuator", "/actuator/health", "/actuator/env", "/actuator/mappings",
+            "/metrics", "/phpinfo.php", "/info.php", "/swagger.json", "/swagger-ui.html",
+            "/openapi.json", "/api-docs", "/v2/api-docs", "/graphql", "/graphiql",
+            "/.svn/entries", "/wp-json/", "/wp-login.php", "/admin", "/administrator", "/login",
+            "/backup.zip", "/backup.sql", "/dump.sql", "/.npmrc", "/elmah.axd", "/trace.axd",
+            "/.well-known/openid-configuration"
+    };
+
+    private JsonObject extractFromCaptured(JsonObject args) {
+        Item item = resolve(getStr(args, "source", "proxy"), getStr(args, "id", null));
+        if (item == null || item.response == null) {
+            return error("No captured response for that source/id.");
+        }
+        JsonObject r = ContentExtractor.extract(item.response.bodyToString(), item.url);
+        r.addProperty("url", item.url);
+        r.addProperty("status", item.response.statusCode());
+        return r;
+    }
+
+    private JsonObject fetchUrl(JsonObject args) {
+        String url = getStr(args, "url", null);
+        if (url == null || url.isBlank()) {
+            return error("url is required");
+        }
+        String method = getStr(args, "method", "GET");
+        int maxBody = getInt(args, "max_body_bytes", 8000);
+        HttpRequest req;
+        try {
+            req = HttpRequest.httpRequestFromUrl(url);
+            if (!"GET".equalsIgnoreCase(method)) {
+                req = req.withMethod(method.toUpperCase());
+            }
+        } catch (RuntimeException e) {
+            return error("Could not build request for URL: " + e.getMessage());
+        }
+        HttpRequestResponse rr = api.http().sendRequest(req);
+        JsonObject r = new JsonObject();
+        r.addProperty("url", url);
+        r.addProperty("method", req.method());
+        if (rr.response() != null) {
+            HttpResponse resp = rr.response();
+            String body = resp.bodyToString();
+            r.addProperty("status", resp.statusCode());
+            r.addProperty("mime", resp.mimeType() == null ? "" : resp.mimeType().toString());
+            r.addProperty("response_headers", headersToStringResp(resp));
+            addTruncated(r, "response_body", body, maxBody);
+            r.add("extracted", ContentExtractor.extract(body, url));
+        } else {
+            r.addProperty("status", 0);
+            r.addProperty("note", "No response received.");
+        }
+        return r;
+    }
+
+    private JsonObject fetchCommonPaths(JsonObject args) {
+        String base = getStr(args, "base_url", null);
+        if (base == null || base.isBlank()) {
+            return error("base_url is required (e.g. https://app.example.com)");
+        }
+        String[] paths = customPaths(args);
+        int cap = Math.min(paths.length, 60);
+
+        JsonArray results = new JsonArray();
+        int found = 0;
+        for (int i = 0; i < cap; i++) {
+            String full = joinUrl(base, paths[i]);
+            try {
+                HttpRequestResponse rr = api.http().sendRequest(HttpRequest.httpRequestFromUrl(full));
+                int status = rr.response() != null ? rr.response().statusCode() : 0;
+                int len = rr.response() != null ? rr.response().body().length() : 0;
+                String ct = rr.response() != null && rr.response().mimeType() != null
+                        ? rr.response().mimeType().toString() : "";
+                boolean interesting = (status == 200 || status == 201 || status == 401 || status == 403)
+                        && len > 0;
+                JsonObject o = new JsonObject();
+                o.addProperty("path", paths[i]);
+                o.addProperty("url", full);
+                o.addProperty("status", status);
+                o.addProperty("length", len);
+                o.addProperty("content_type", ct);
+                o.addProperty("interesting", interesting);
+                results.add(o);
+                if (interesting) {
+                    found++;
+                }
+            } catch (RuntimeException e) {
+                // skip unresolvable path
+            }
+        }
+        JsonObject r = new JsonObject();
+        r.addProperty("base_url", base);
+        r.addProperty("tried", cap);
+        r.addProperty("interesting_count", found);
+        r.add("results", results);
+        r.addProperty("note", "Review 'interesting' entries; fetch promising ones with fetch_url to "
+                + "extract links/JS/endpoints/secrets.");
+        return r;
+    }
+
+    private static String[] customPaths(JsonObject args) {
+        if (args.has("paths") && args.get("paths").isJsonArray()) {
+            JsonArray a = args.getAsJsonArray("paths");
+            if (a.size() > 0) {
+                String[] out = new String[a.size()];
+                for (int i = 0; i < a.size(); i++) {
+                    out[i] = a.get(i).getAsString();
+                }
+                return out;
+            }
+        }
+        return RECON_PATHS;
+    }
+
+    private static String joinUrl(String base, String path) {
+        String b = base.endsWith("/") ? base.substring(0, base.length() - 1) : base;
+        String p = path.startsWith("/") ? path : "/" + path;
+        return b + p;
+    }
+
     // ------------------------------------------------------------------ confirmation-card helpers
 
     /** Best-effort target URL(s) for the confirmation card and scope check. */
@@ -834,6 +969,12 @@ public final class ToolExecutor {
                 case "remove_from_scope":
                     urls.add(getStr(args, "url_prefix", ""));
                     break;
+                case "fetch_url":
+                    urls.add(getStr(args, "url", ""));
+                    break;
+                case "fetch_common_paths":
+                    urls.add(getStr(args, "base_url", ""));
+                    break;
                 default:
                     break;
             }
@@ -850,6 +991,8 @@ public final class ToolExecutor {
             case "start_active_audit":
             case "run_request_sequence":
             case "start_passive_audit":
+            case "fetch_url":
+            case "fetch_common_paths":
                 return true;
             default:
                 return false;
@@ -874,6 +1017,12 @@ public final class ToolExecutor {
                 return "Start an ACTIVE Burp scan against the target (can send many requests).";
             case "run_request_sequence":
                 return "Send a SERIES of crafted requests to the target.";
+            case "fetch_url":
+                return "Fetch a URL (" + getStr(args, "method", "GET")
+                        + ") and extract links / JS / endpoints / secrets from the response.";
+            case "fetch_common_paths":
+                return "Probe common recon/misconfig paths (robots.txt, sitemap, .git, .env, "
+                        + "actuator, swagger, admin, …) on the target.";
             default:
                 return tool;
         }
@@ -927,6 +1076,9 @@ public final class ToolExecutor {
         }
         if ("start_active_audit".equals(tool)) {
             return "Active scan — count is open-ended (Burp decides how many requests to send).";
+        }
+        if ("fetch_common_paths".equals(tool)) {
+            return customPaths(args).length + " path probes against " + getStr(args, "base_url", "");
         }
         return null;
     }
