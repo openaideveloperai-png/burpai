@@ -62,6 +62,7 @@ public final class ChatController {
     private final AtomicBoolean turnRunning = new AtomicBoolean(false);
     private volatile boolean cancelled = false;
     private volatile CompletableFuture<Decision> pendingConfirmation;
+    private volatile String lastUserText;
 
     public ChatController(BurpContext ctx, Settings settings, List<AiProvider> providers,
                           ToolExecutor executor, ConfirmationManager confirmations,
@@ -100,6 +101,7 @@ public final class ChatController {
             return;
         }
         cancelled = false;
+        lastUserText = text;
         tab.setBusy(true);
         tab.addUserMessage(text);
 
@@ -132,6 +134,17 @@ public final class ChatController {
     public void clearSession() {
         cancelCurrentTurn();
         history.clear();
+    }
+
+    /** Re-run the last user message (e.g. to get a different answer). */
+    public void regenerate() {
+        String last = lastUserText;
+        if (last == null || last.isBlank()) {
+            tab.addNotice("Nothing to regenerate yet.");
+            return;
+        }
+        tab.addNotice("Regenerating…");
+        submitUserMessage(last);
     }
 
     // ---- the agent loop ----------------------------------------------------

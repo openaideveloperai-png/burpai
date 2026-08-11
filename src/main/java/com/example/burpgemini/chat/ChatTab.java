@@ -79,7 +79,16 @@ public final class ChatTab extends JPanel {
         contextChip.setAlignmentX(Component.LEFT_ALIGNMENT);
         JButton removeChip = new JButton("✕");
         removeChip.setMargin(new java.awt.Insets(0, 4, 0, 4));
+        removeChip.setToolTipText("Clear all attached context");
         removeChip.addActionListener(e -> ctx.clearContextItems());
+        contextChipLabel.setToolTipText("Click to manage attached requests");
+        contextChipLabel.setCursor(java.awt.Cursor.getPredefinedCursor(java.awt.Cursor.HAND_CURSOR));
+        contextChipLabel.addMouseListener(new java.awt.event.MouseAdapter() {
+            @Override
+            public void mouseClicked(java.awt.event.MouseEvent ev) {
+                showContextMenu(ev);
+            }
+        });
         contextChip.add(contextChipLabel);
         contextChip.add(Box.createHorizontalStrut(6));
         contextChip.add(removeChip);
@@ -168,9 +177,20 @@ public final class ChatTab extends JPanel {
         copyReply.setToolTipText("Copy the AI's last reply to the clipboard.");
         copyReply.addActionListener(e -> copyToClipboard(lastReply, "last reply"));
 
+        JButton regen = new JButton("Regenerate");
+        regen.setAlignmentX(Component.CENTER_ALIGNMENT);
+        regen.setToolTipText("Re-run your last message for a fresh answer.");
+        regen.addActionListener(e -> {
+            if (controller != null) {
+                controller.regenerate();
+            }
+        });
+
         buttons.add(sendButton);
         buttons.add(Box.createVerticalStrut(4));
         buttons.add(cancelButton);
+        buttons.add(Box.createVerticalStrut(4));
+        buttons.add(regen);
         buttons.add(Box.createVerticalStrut(4));
         buttons.add(clearButton);
         buttons.add(Box.createVerticalStrut(4));
@@ -432,7 +452,10 @@ denied, adapt.
 
     // ---- helpers -----------------------------------------------------------
 
+    private volatile List<HttpRequestResponse> currentContext = java.util.List.of();
+
     private void updateContextChip(List<HttpRequestResponse> items) {
+        currentContext = items == null ? java.util.List.of() : items;
         if (items == null || items.isEmpty()) {
             contextChip.setVisible(false);
             return;
@@ -454,6 +477,32 @@ denied, adapt.
         tip.append("</html>");
         contextChipLabel.setToolTipText(tip.toString());
         contextChip.setVisible(true);
+    }
+
+    /** Popup to remove individual attached requests. */
+    private void showContextMenu(java.awt.event.MouseEvent ev) {
+        List<HttpRequestResponse> items = currentContext;
+        if (items.isEmpty()) {
+            return;
+        }
+        javax.swing.JPopupMenu menu = new javax.swing.JPopupMenu();
+        for (int i = 0; i < items.size(); i++) {
+            HttpRequestResponse rr = items.get(i);
+            String m = rr.request() != null ? rr.request().method() : "?";
+            String u = rr.request() != null ? rr.request().url() : "";
+            if (u.length() > 70) {
+                u = u.substring(0, 70) + "…";
+            }
+            final int idx = i;
+            javax.swing.JMenuItem mi = new javax.swing.JMenuItem("Remove: " + m + " " + u);
+            mi.addActionListener(a -> ctx.removeContextItem(idx));
+            menu.add(mi);
+        }
+        menu.addSeparator();
+        javax.swing.JMenuItem clear = new javax.swing.JMenuItem("Clear all");
+        clear.addActionListener(a -> ctx.clearContextItems());
+        menu.add(clear);
+        menu.show(ev.getComponent(), ev.getX(), ev.getY());
     }
 
     private void addRow(Supplier<Component> factory) {

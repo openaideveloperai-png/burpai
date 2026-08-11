@@ -33,7 +33,8 @@ Both providers are called directly with **your own key/token** — it does **not
   **Add to AI Assistant context** (accumulate multiple requests over time), **Set as AI context
   (replace)**, and one‑click **Analyze with AI** / **Explain this request/response with AI**. The
   chat shows a chip with the attached count (hover to list them).
-- **Copy chat / Copy reply** buttons, and **Export report** (Markdown) from the AI Recon tab.
+- **Copy chat / Copy reply / Regenerate** buttons; click the context chip to **remove individual
+  attached requests**. **Export report** (Markdown) from the AI Recon tab.
 - **🤖 Auto‑hunt (autonomous assessment)** — one click turns the AI loose on an in‑scope target:
   it fetches `robots.txt` / `sitemap.xml` / `/.well-known/security.txt`, probes common
   misconfig/exposure paths (`.git`, `.env`, `/actuator`, swagger/openapi, `/graphql`, admin, backups),

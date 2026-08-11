@@ -90,6 +90,15 @@ public final class BurpContext {
         setContextItems(new ArrayList<>());
     }
 
+    /** Remove a single attached context item by index. */
+    public void removeContextItem(int index) {
+        List<HttpRequestResponse> merged = new ArrayList<>(contextItems);
+        if (index >= 0 && index < merged.size()) {
+            merged.remove(index);
+            setContextItems(merged);
+        }
+    }
+
     public void setContextListener(Consumer<List<HttpRequestResponse>> listener) {
         this.contextListener = listener;
     }

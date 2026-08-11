@@ -267,26 +267,17 @@ public final class OpenAiCompatibleProvider implements AiProvider {
                     messages.add(Message.of("user", m.text == null ? "" : m.text));
                     break;
                 case MODEL: {
-                    StringBuilder sb = new StringBuilder();
-                    if (m.text != null && !m.text.isEmpty()) {
-                        sb.append(m.text);
+                    // Carry only the model's prose. Do NOT echo tool-call syntax here: models copy the
+                    // transcript format and start emitting tool calls as PLAIN TEXT (which then get
+                    // truncated mid-token). The TOOL results below give all the context that's needed;
+                    // new tool calls are made structurally via `tools`.
+                    boolean hasCalls = m.toolCalls != null && !m.toolCalls.isEmpty();
+                    String text = (m.text == null || m.text.isEmpty())
+                            ? (hasCalls ? "(ran tools; results below)" : "")
+                            : m.text;
+                    if (!text.isEmpty()) {
+                        messages.add(Message.of("assistant", text));
                     }
-                    if (m.toolCalls != null && !m.toolCalls.isEmpty()) {
-                        if (sb.length() > 0) {
-                            sb.append('\n');
-                        }
-                        sb.append("[Called tools: ");
-                        for (int i = 0; i < m.toolCalls.size(); i++) {
-                            ToolCallRequest tc = m.toolCalls.get(i);
-                            if (i > 0) {
-                                sb.append("; ");
-                            }
-                            sb.append(tc.name).append('(')
-                              .append(tc.args == null ? "{}" : gson.toJson(tc.args)).append(')');
-                        }
-                        sb.append(']');
-                    }
-                    messages.add(Message.of("assistant", sb.length() == 0 ? "(thinking)" : sb.toString()));
                     break;
                 }
                 case TOOL: {
