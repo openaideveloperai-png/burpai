@@ -97,11 +97,16 @@ public enum RiskTier {
         BY_TOOL.put("authz_matrix", TIER4_AUTHORIZED);
         BY_TOOL.put("discover_params", TIER4_AUTHORIZED);
         BY_TOOL.put("race_requests", TIER4_AUTHORIZED);
+        // State-changing API tests — replay unexpected verbs / over-post privileged fields.
+        BY_TOOL.put("test_method_tampering", TIER4_AUTHORIZED);
+        BY_TOOL.put("test_mass_assignment", TIER4_AUTHORIZED);
 
         // Tier 2 — confirm + warning, sends traffic to the target.
         BY_TOOL.put("send_http_request", TIER2_CONFIRM_WARN);
         BY_TOOL.put("start_passive_audit", TIER2_CONFIRM_WARN);
         BY_TOOL.put("fetch_url", TIER2_CONFIRM_WARN);
+        // GraphQL introspection is a single benign read query.
+        BY_TOOL.put("graphql_introspect", TIER2_CONFIRM_WARN);
 
         // Tier 3 — confirm + strong warning, active / high-volume / stateful.
         BY_TOOL.put("start_active_audit", TIER3_CONFIRM_STRONG);

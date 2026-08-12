@@ -47,4 +47,42 @@ public final class Payloads {
             "Function(", "location.href", "location.assign", "location.replace", "insertAdjacentHTML",
             "dangerouslySetInnerHTML", "srcdoc", ".html(", "$(location", "window.name",
     };
+
+    // ---- API testing --------------------------------------------------------
+
+    /** Minimal GraphQL introspection query — a full schema in the response means introspection is on. */
+    public static final String GRAPHQL_INTROSPECTION =
+            "{\"query\":\"query IntrospectionQuery { __schema { queryType { name } mutationType { name } "
+            + "types { name kind } } }\"}";
+
+    /** Signs that a body is a GraphQL response (schema present or a GraphQL-shaped error/envelope). */
+    public static final String[] GRAPHQL_SIGNS = {
+            "__schema", "queryType", "\"data\"", "\"errors\"", "Cannot query field",
+            "GraphQL", "must be defined", "Did you mean",
+    };
+
+    /**
+     * HTTP methods to try for verb/method-tampering (access-control bypass, unintended write handlers).
+     * PUT/DELETE/PATCH can be state-changing, which is exactly why this is authorized-only.
+     */
+    public static final String[] TAMPER_METHODS = {
+            "GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS", "TRACE", "PROPFIND", "FOO",
+    };
+
+    /** Method-override headers some frameworks honour (turns a POST into a hidden PUT/DELETE). */
+    public static final String[] METHOD_OVERRIDE_HEADERS = {
+            "X-HTTP-Method-Override", "X-HTTP-Method", "X-Method-Override",
+    };
+
+    /**
+     * Privileged fields to graft onto a write request for mass-assignment / over-posting tests
+     * (name -> value). A privilege change that "sticks" in the response is the signal.
+     */
+    public static final String[][] MASS_ASSIGN_FIELDS = {
+            {"role", "admin"}, {"is_admin", "true"}, {"isAdmin", "true"}, {"admin", "true"},
+            {"is_superuser", "true"}, {"account_type", "admin"}, {"user_role", "admin"},
+            {"privilege", "admin"}, {"is_verified", "true"}, {"verified", "true"},
+            {"email_verified", "true"}, {"active", "true"}, {"status", "active"},
+            {"balance", "999999"}, {"credit", "999999"}, {"approved", "true"}, {"is_staff", "true"},
+    };
 }

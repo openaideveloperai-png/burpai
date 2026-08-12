@@ -301,6 +301,40 @@ public final class ToolRegistry {
                         p("count", intType("Number of concurrent requests (default 20, max 30)."))
                 ), req())));
 
+        // ---- API-specific testing ------------------------------------------
+
+        d.add(new ToolSpec("graphql_introspect",
+                "Send a GraphQL introspection query to an endpoint and report whether the schema is "
+                        + "exposed (introspection left on in prod maps the whole API). Sends one request — "
+                        + "requires confirmation. Point base_id/raw_request at the GraphQL endpoint.",
+                obj(props(
+                        p("base_id", strType("Base item id (a request to the GraphQL endpoint).")),
+                        p("base_source", enumType("Where base_id comes from.", "proxy", "sitemap", "selection")),
+                        p("raw_request", strType("Optional raw request instead of a base id."))
+                ), req())));
+
+        d.add(new ToolSpec("test_method_tampering",
+                "ACTIVE, authorized-only. Replay a request with alternate HTTP verbs (incl. "
+                        + "PUT/PATCH/DELETE/TRACE) and method-override headers to find access-control / "
+                        + "verb-tampering bypasses. May change state — authorized-only.",
+                obj(props(
+                        p("base_id", strType("Base item id.")),
+                        p("base_source", enumType("Where base_id comes from.", "proxy", "sitemap", "selection")),
+                        p("raw_request", strType("Optional raw request instead of a base id.")),
+                        p("modifications", mutationArray())
+                ), req())));
+
+        d.add(new ToolSpec("test_mass_assignment",
+                "ACTIVE, authorized-only. Over-post privileged fields (role, is_admin, balance, …) onto "
+                        + "a write request (JSON or form) and diff the response to detect mass-assignment / "
+                        + "over-posting. Mutates the target object — authorized-only.",
+                obj(props(
+                        p("base_id", strType("Base item id (ideally a POST/PUT/PATCH write request).")),
+                        p("base_source", enumType("Where base_id comes from.", "proxy", "sitemap", "selection")),
+                        p("raw_request", strType("Optional raw request instead of a base id.")),
+                        p("modifications", mutationArray())
+                ), req())));
+
         return d;
     }
 

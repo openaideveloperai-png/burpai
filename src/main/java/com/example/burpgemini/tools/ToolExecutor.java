@@ -126,6 +126,12 @@ public final class ToolExecutor {
                     return discoverParams(args);
                 case "race_requests":
                     return raceRequests(args);
+                case "graphql_introspect":
+                    return graphqlIntrospect(args);
+                case "test_method_tampering":
+                    return testMethodTampering(args);
+                case "test_mass_assignment":
+                    return testMassAssignment(args);
                 case "report_finding":
                     return reportFinding(args);
                 case "decode_transform":
@@ -1331,6 +1337,200 @@ public final class ToolExecutor {
         }
     }
 
+    // ------------------------------------------------------------------ API-specific testing
+
+    /**
+     * Send a GraphQL introspection query and report whether the schema comes back (introspection
+     * left enabled in production is an info-leak that maps the whole API attack surface).
+     */
+    private JsonObject graphqlIntrospect(JsonObject args) {
+        HttpRequest base;
+        try {
+            base = buildRequestFromSpec(args);
+        } catch (IllegalArgumentException e) {
+            return error(e.getMessage() + " (or pass a raw_request/base pointing at the GraphQL endpoint).");
+        }
+        HttpRequest req = base.withMethod("POST")
+                .withUpdatedHeader("Content-Type", "application/json")
+                .withBody(Payloads.GRAPHQL_INTROSPECTION);
+        HttpRequestResponse rr = api.http().sendRequest(req);
+        String body = bodyStr(rr);
+
+        boolean enabled = body.contains("__schema") && body.contains("\"types\"");
+        boolean looksGraphql = false;
+        for (String s : Payloads.GRAPHQL_SIGNS) {
+            if (body.contains(s)) {
+                looksGraphql = true;
+                break;
+            }
+        }
+        JsonObject r = new JsonObject();
+        r.addProperty("url", req.url());
+        r.addProperty("status", statusOf(rr));
+        r.addProperty("looks_like_graphql", looksGraphql);
+        r.addProperty("introspection_enabled", enabled);
+        if (enabled) {
+            r.addProperty("type_count", countOccurrences(body, "\"name\""));
+            r.addProperty("has_mutations", body.contains("mutationType") && !body.contains("\"mutationType\":null"));
+            addTruncated(r, "schema_excerpt", body, 4000);
+            r.addProperty("note", "Introspection is ENABLED — the full schema (types, queries, mutations) is "
+                    + "exposed. Record with report_finding, then mine the schema for sensitive "
+                    + "queries/mutations and object-level access-control (BOLA) targets.");
+        } else if (looksGraphql) {
+            r.addProperty("note", "GraphQL endpoint detected but introspection appears disabled. Try field "
+                    + "suggestion ('Did you mean') to infer the schema, and test known operations for "
+                    + "authorization flaws and batching/alias-based rate-limit bypass.");
+        } else {
+            r.addProperty("note", "Response doesn't look like GraphQL — confirm the endpoint path (often "
+                    + "/graphql, /api/graphql, /query).");
+        }
+        return r;
+    }
+
+    /**
+     * Replay the request with a range of HTTP verbs (and method-override headers) and report which
+     * are accepted — a verb the app didn't expect can bypass access control or hit an unintended
+     * write handler. Authorized-only because PUT/PATCH/DELETE can change state.
+     */
+    private JsonObject testMethodTampering(JsonObject args) {
+        HttpRequest base;
+        try {
+            base = buildRequestFromSpec(args);
+        } catch (IllegalArgumentException e) {
+            return error(e.getMessage());
+        }
+        HttpRequestResponse baseRR = api.http().sendRequest(base);
+        int baseStatus = statusOf(baseRR);
+        String origMethod = base.method();
+
+        JsonArray results = new JsonArray();
+        JsonArray interesting = new JsonArray();
+        for (String method : Payloads.TAMPER_METHODS) {
+            if (method.equalsIgnoreCase(origMethod)) {
+                continue;
+            }
+            int status;
+            try {
+                status = statusOf(api.http().sendRequest(base.withMethod(method)));
+            } catch (RuntimeException e) {
+                continue;
+            }
+            JsonObject o = new JsonObject();
+            o.addProperty("method", method);
+            o.addProperty("status", status);
+            results.add(o);
+            // 2xx/3xx on a non-standard or state-changing verb is worth a closer look.
+            boolean accepted = status >= 200 && status < 400;
+            boolean risky = method.equals("PUT") || method.equals("DELETE") || method.equals("PATCH")
+                    || method.equals("TRACE") || method.equals("PROPFIND") || method.equals("FOO");
+            if (accepted && risky) {
+                interesting.add(o);
+            }
+        }
+        // Method-override headers: keep the original verb but ask the app to treat it as PUT/DELETE.
+        JsonArray overrides = new JsonArray();
+        for (String h : Payloads.METHOD_OVERRIDE_HEADERS) {
+            for (String v : new String[]{"PUT", "DELETE"}) {
+                int status = statusOf(api.http().sendRequest(base.withMethod("POST").withUpdatedHeader(h, v)));
+                if (status != baseStatus && status >= 200 && status < 400) {
+                    JsonObject o = new JsonObject();
+                    o.addProperty("header", h);
+                    o.addProperty("value", v);
+                    o.addProperty("status", status);
+                    overrides.add(o);
+                }
+            }
+        }
+        JsonObject r = new JsonObject();
+        r.addProperty("url", base.url());
+        r.addProperty("original_method", origMethod);
+        r.addProperty("baseline_status", baseStatus);
+        r.add("method_results", results);
+        r.add("accepted_risky_methods", interesting);
+        r.add("accepted_override_headers", overrides);
+        r.addProperty("note", (interesting.size() > 0 || overrides.size() > 0)
+                ? "A state-changing verb / override was accepted. Verify it actually performs the action "
+                  + "(not a generic 200) before recording — this can be an access-control or CSRF bypass."
+                : "No unexpected verb accepted.");
+        return r;
+    }
+
+    /**
+     * Over-post privileged fields onto a write request (JSON body or form params) and diff the
+     * response — a privilege value that appears/echoes in the result is a mass-assignment signal.
+     * Authorized-only: this mutates the target object.
+     */
+    private JsonObject testMassAssignment(JsonObject args) {
+        HttpRequest base;
+        try {
+            base = buildRequestFromSpec(args);
+        } catch (IllegalArgumentException e) {
+            return error(e.getMessage());
+        }
+        HttpRequestResponse baseRR = api.http().sendRequest(base);
+        int baseStatus = statusOf(baseRR);
+        String baseBody = bodyStr(baseRR);
+        String ct = headerValue(base, "Content-Type");
+        boolean json = ct != null && ct.toLowerCase().contains("json");
+
+        JsonArray hits = new JsonArray();
+        int tried = 0;
+        for (String[] field : Payloads.MASS_ASSIGN_FIELDS) {
+            String name = field[0];
+            String value = field[1];
+            HttpRequest r = json ? injectJsonField(base, name, value)
+                    : base.withParameter(HttpParameter.parameter(name, value, HttpParameterType.BODY));
+            tried++;
+            HttpRequestResponse rr = api.http().sendRequest(r);
+            String body = bodyStr(rr);
+            int status = statusOf(rr);
+            // Signal: the injected field/value is echoed back, or the write now succeeds where the
+            // baseline didn't, or the response body meaningfully changes.
+            boolean echoed = body.contains("\"" + name + "\"") && body.contains(value);
+            JsonObject cmp = ResponseDiff.compare(baseStatus, baseBody, status, body);
+            boolean changed = cmp.get("significantly_different").getAsBoolean();
+            if (echoed || (changed && status >= 200 && status < 300)) {
+                JsonObject o = new JsonObject();
+                o.addProperty("field", name);
+                o.addProperty("value", value);
+                o.addProperty("status", status);
+                o.addProperty("echoed_in_response", echoed);
+                o.addProperty("changed_response", changed);
+                hits.add(o);
+            }
+        }
+        JsonObject r = new JsonObject();
+        r.addProperty("url", base.url());
+        r.addProperty("body_style", json ? "json" : "form");
+        r.addProperty("fields_tried", tried);
+        r.add("candidates", hits);
+        r.addProperty("note", hits.size() > 0
+                ? "Privileged field(s) were accepted/echoed — verify the privilege actually persisted "
+                  + "(re-fetch the object as the same or a lower-priv identity) before recording."
+                : "No mass-assignment signal from the tried fields.");
+        return r;
+    }
+
+    /** Inject/replace a top-level field in a JSON body (string-level, tolerant of non-strict JSON). */
+    private HttpRequest injectJsonField(HttpRequest req, String name, String value) {
+        String body = req.bodyToString();
+        String field = "\"" + name + "\":\"" + value + "\"";
+        String trimmed = body == null ? "" : body.trim();
+        String newBody;
+        if (trimmed.startsWith("{") && trimmed.length() >= 2) {
+            int close = trimmed.lastIndexOf('}');
+            String inner = trimmed.substring(1, close).trim();
+            newBody = inner.isEmpty() ? "{" + field + "}" : "{" + inner + "," + field + "}";
+        } else {
+            newBody = "{" + field + "}";
+        }
+        return req.withBody(newBody);
+    }
+
+    private static String headerValue(HttpRequest req, String name) {
+        return req.hasHeader(name) ? req.headerValue(name) : null;
+    }
+
     // ------------------------------------------------------------------ client-side analysis & findings
 
     private JsonObject analyzeClientSide(JsonObject args) {
@@ -1603,6 +1803,9 @@ public final class ToolExecutor {
                 case "test_injection":
                 case "discover_params":
                 case "race_requests":
+                case "graphql_introspect":
+                case "test_method_tampering":
+                case "test_mass_assignment":
                     try {
                         urls.add(buildRequestFromSpec(args).url());
                     } catch (RuntimeException ignored) {
@@ -1631,6 +1834,9 @@ public final class ToolExecutor {
             case "test_injection":
             case "discover_params":
             case "race_requests":
+            case "graphql_introspect":
+            case "test_method_tampering":
+            case "test_mass_assignment":
                 return true;
             default:
                 return false;
@@ -1671,6 +1877,14 @@ public final class ToolExecutor {
                 return "Brute-force hidden parameters and detect which change the response.";
             case "race_requests":
                 return "Fire " + getInt(args, "count", 20) + " CONCURRENT requests (race condition test).";
+            case "graphql_introspect":
+                return "Send a GraphQL introspection query and check whether the schema is exposed.";
+            case "test_method_tampering":
+                return "Replay the request with alternate HTTP verbs (incl. PUT/PATCH/DELETE) and "
+                        + "method-override headers to test for access-control / verb-tampering bypass.";
+            case "test_mass_assignment":
+                return "Over-post privileged fields (role/is_admin/…) onto the write request to test "
+                        + "for mass-assignment; this mutates the target object.";
             default:
                 return tool;
         }
@@ -1736,6 +1950,17 @@ public final class ToolExecutor {
         }
         if ("test_injection".equals(tool)) {
             return "several payloads for the " + getStr(args, "inject_class", "?") + " oracle";
+        }
+        if ("graphql_introspect".equals(tool)) {
+            return "1 introspection query";
+        }
+        if ("test_method_tampering".equals(tool)) {
+            return Payloads.TAMPER_METHODS.length + " verb probes + "
+                    + (Payloads.METHOD_OVERRIDE_HEADERS.length * 2) + " override-header probes "
+                    + "(some may change state)";
+        }
+        if ("test_mass_assignment".equals(tool)) {
+            return Payloads.MASS_ASSIGN_FIELDS.length + " privileged-field write attempts";
         }
         return null;
     }

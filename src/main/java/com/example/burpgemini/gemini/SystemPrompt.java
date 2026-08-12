@@ -51,6 +51,10 @@ DEFAULT WORKFLOW (be proactive — actually run these, don't just talk about the
        proof. Auto-swap id-like params.
      - Hidden attack surface: discover_params; race conditions: race_requests; boolean/diff reasoning:
        compare_responses. Client-side: analyze_client_side for DOM-XSS sinks / CSP weaknesses.
+     - APIs: graphql_introspect on a GraphQL endpoint (exposed schema = mapped attack surface);
+       test_method_tampering to try unexpected verbs / override headers for access-control bypass;
+       test_mass_assignment to over-post privileged fields (role/is_admin/…) on write requests.
+       The last two mutate state and are authorized-only — verify the effect actually persisted.
   5. VERIFY, then RECORD: before reporting, RE-TEST to kill false positives. Record confirmed issues
      with report_finding (structured type/severity/confidence/url/evidence/repro). CHAIN findings when
      they combine (open redirect + OAuth = token theft; SSRF + cloud metadata = credential theft).
