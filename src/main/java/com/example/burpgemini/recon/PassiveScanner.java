@@ -45,6 +45,30 @@ public final class PassiveScanner implements ProxyResponseHandler {
 
     private static final Pattern URL_HOST = Pattern.compile("https?://([A-Za-z0-9.\\-]+)");
 
+    /** JS source-map reference: {@code //# sourceMappingURL=app.js.map} (or the older {@code //@}). */
+    private static final Pattern SOURCE_MAP_REF =
+            Pattern.compile("//[#@]\\s*sourceMappingURL=([^\\s'\"]+)");
+
+    /**
+     * A quoted assignment {@code name: "value"} / {@code "name":"value"} / {@code name='value'} whose
+     * value is a long token — the entropy check decides if it's actually a secret.
+     */
+    private static final Pattern SECRET_ASSIGN = Pattern.compile(
+            "[\"']?([A-Za-z0-9_.\\-]{2,40})[\"']?\\s*[:=]\\s*[\"']([A-Za-z0-9_\\-+/=.]{16,120})[\"']");
+
+    /** Parameter name suggests the value is a variable name of a secret. */
+    private static final String[] SECRET_NAME_HINTS = {
+            "key", "secret", "token", "passwd", "password", "pwd", "apikey", "api_key", "auth",
+            "credential", "private", "access", "session", "signature", "client_secret", "aws",
+    };
+
+    /** Redirect-target parameter names — open-redirect / SSRF candidates. */
+    private static final String[] REDIRECT_PARAMS = {
+            "redirect", "redirect_uri", "redirecturl", "redirect_url", "url", "next", "return",
+            "returnurl", "return_url", "returnto", "return_to", "continue", "dest", "destination",
+            "goto", "callback", "redir", "target", "out", "to", "forward",
+    };
+
     private final BurpContext ctx;
     private final FindingsStore store;
     private final InfoStore info;
@@ -102,10 +126,14 @@ public final class PassiveScanner implements ProxyResponseHandler {
         checkCors(response, req, url);
         checkTechDisclosure(response, url);
         checkUrlSecrets(url);
+        checkOpenRedirect(req, response, url);
 
         if (body != null) {
             checkBody(body, response, url);
             checkReflectedParams(req, response, body, url);
+            checkSourceMap(body, response, url);
+            checkGraphql(body, req, url);
+            checkEntropySecrets(body, url);
         }
 
         // Optional AI enrichment: only on newly-seen endpoints, and only when enabled.
@@ -251,6 +279,184 @@ public final class PassiveScanner implements ProxyResponseHandler {
                 }
             }
         }
+    }
+
+    /** Source maps: a served .map file leaks original source; a JS reference points to one. */
+    private void checkSourceMap(String body, InterceptedResponse r, String url) {
+        String lc = url.toLowerCase();
+        String ct = header(r, "Content-Type");
+        String cc = ct == null ? "" : ct.toLowerCase();
+        // A source-map file actually being served (reveals original, pre-minified source).
+        if ((lc.endsWith(".map") || lc.contains(".js.map") || lc.contains(".css.map"))
+                && r.statusCode() == 200
+                && body.contains("\"version\"") && (body.contains("\"sources\"") || body.contains("\"mappings\""))) {
+            add("Source map exposed", "Low", "Firm", url,
+                    "A .map file is served — it reconstructs the original, un-minified source.");
+            return;
+        }
+        // A JS file pointing at its source map (the map is probably fetchable at that path).
+        boolean js = cc.contains("javascript") || lc.endsWith(".js");
+        if (js) {
+            var m = SOURCE_MAP_REF.matcher(body);
+            if (m.find()) {
+                add("Source map reference in JS", "Info", "Firm", url,
+                        "JS references sourceMappingURL=" + trim(m.group(1), 80)
+                        + " — fetch it to recover original source.");
+            }
+        }
+    }
+
+    /** GraphQL: flag the endpoint, and passively catch introspection/field-suggestion left enabled. */
+    private void checkGraphql(String body, HttpRequest req, String url) {
+        String lc = url.toLowerCase();
+        boolean pathIsGraphql = lc.contains("/graphql") || lc.contains("/gql") || lc.endsWith("/query");
+        boolean bodyLooksGraphql = body.contains("\"data\"") && body.contains("\"errors\"")
+                || body.contains("__schema") || body.contains("__typename");
+        if (!pathIsGraphql && !bodyLooksGraphql) {
+            return;
+        }
+        info.addTech("GraphQL endpoint: " + FindingsStore.endpointSignature(url));
+        if (body.contains("__schema") && body.contains("\"types\"")) {
+            add("GraphQL introspection enabled", "Medium", "Firm", url,
+                    "Response exposes the GraphQL schema (__schema/types) — maps the full API surface.");
+        } else if (body.contains("Did you mean") || body.contains("Cannot query field")) {
+            add("GraphQL field suggestions enabled", "Low", "Tentative", url,
+                    "GraphQL 'Did you mean'/field-suggestion errors let an attacker infer the schema.");
+        } else {
+            add("GraphQL endpoint", "Info", "Firm", url,
+                    "GraphQL endpoint detected — test authorization per-field/object (BOLA), batching and "
+                    + "alias-based rate-limit bypass; try introspection.");
+        }
+    }
+
+    /** High-entropy tokens assigned to secret-looking names in JS/JSON — likely hard-coded keys. */
+    private void checkEntropySecrets(String body, String url) {
+        String scan = body.length() > MAX_BODY_SCAN ? body.substring(0, MAX_BODY_SCAN) : body;
+        var m = SECRET_ASSIGN.matcher(scan);
+        int flagged = 0;
+        int scanned = 0;
+        while (m.find() && scanned++ < 4000 && flagged < 5) {
+            String name = m.group(1);
+            String value = m.group(2);
+            String ln = name.toLowerCase();
+            boolean nameHints = false;
+            for (String h : SECRET_NAME_HINTS) {
+                if (ln.contains(h)) {
+                    nameHints = true;
+                    break;
+                }
+            }
+            if (!nameHints) {
+                continue;
+            }
+            // Skip obvious non-secrets: URLs, dotted paths, MIME types, all-lowercase words.
+            if (value.contains("/") && value.contains(".") || value.startsWith("http")) {
+                continue;
+            }
+            if (shannon(value) >= 3.6 && hasMixedClasses(value)) {
+                add("Hard-coded secret (high entropy)", "Medium", "Tentative", url,
+                        "'" + name + "' = a " + value.length() + "-char high-entropy token ("
+                        + mask(value) + ") — verify it's a live credential.");
+                info.recordSecret("High-entropy '" + name + "'", value, url);
+                flagged++;
+            }
+        }
+    }
+
+    /** Redirect-target params that reflect into a Location header (open redirect) or carry a URL value. */
+    private void checkOpenRedirect(HttpRequest req, InterceptedResponse r, String url) {
+        String location = header(r, "Location");
+        int status = r.statusCode();
+        boolean redirect = status >= 300 && status < 400 && location != null;
+        int flagged = 0;
+        for (ParsedHttpParameter p : req.parameters()) {
+            if (flagged >= 3) {
+                break;
+            }
+            String pn = p.name() == null ? "" : p.name().toLowerCase();
+            boolean isRedirParam = false;
+            for (String rp : REDIRECT_PARAMS) {
+                if (pn.equals(rp)) {
+                    isRedirParam = true;
+                    break;
+                }
+            }
+            if (!isRedirParam) {
+                continue;
+            }
+            String val = urlDecode(p.value() == null ? "" : p.value());
+            boolean urlish = val.startsWith("http://") || val.startsWith("https://")
+                    || val.startsWith("//") || val.startsWith("/\\") || val.startsWith("/");
+            if (redirect && !val.isEmpty() && (location.contains(val) || location.equalsIgnoreCase(val))) {
+                add("Open redirect (reflected in Location)", "Medium", "Firm", url,
+                        "Param '" + p.name() + "'=" + trim(val, 60) + " is reflected into the "
+                        + status + " Location header.");
+                flagged++;
+            } else if (urlish) {
+                add("Open-redirect-prone parameter", "Info", "Tentative", url,
+                        "Param '" + p.name() + "' takes a URL/path (" + trim(val, 60)
+                        + ") — test for open redirect / SSRF.");
+                flagged++;
+            }
+        }
+    }
+
+    // ---- small numeric/text helpers for the detectors above ----------------
+
+    /** Shannon entropy (bits/char) of a string — a cheap "does this look random?" signal. */
+    private static double shannon(String s) {
+        if (s == null || s.isEmpty()) {
+            return 0;
+        }
+        int[] counts = new int[128];
+        int total = 0;
+        for (int i = 0; i < s.length(); i++) {
+            char c = s.charAt(i);
+            if (c < 128) {
+                counts[c]++;
+                total++;
+            }
+        }
+        double h = 0;
+        for (int c : counts) {
+            if (c > 0) {
+                double pr = (double) c / total;
+                h -= pr * (Math.log(pr) / Math.log(2));
+            }
+        }
+        return h;
+    }
+
+    /** True if the token mixes character classes (upper/lower/digit) — filters out dictionary words. */
+    private static boolean hasMixedClasses(String s) {
+        boolean up = false;
+        boolean lo = false;
+        boolean di = false;
+        for (int i = 0; i < s.length(); i++) {
+            char c = s.charAt(i);
+            if (Character.isUpperCase(c)) {
+                up = true;
+            } else if (Character.isLowerCase(c)) {
+                lo = true;
+            } else if (Character.isDigit(c)) {
+                di = true;
+            }
+        }
+        return (up && di) || (lo && di) || (up && lo && di);
+    }
+
+    private static String mask(String s) {
+        if (s.length() <= 8) {
+            return s.charAt(0) + "…";
+        }
+        return s.substring(0, 4) + "…" + s.substring(s.length() - 3);
+    }
+
+    private static String trim(String s, int max) {
+        if (s == null) {
+            return "";
+        }
+        return s.length() <= max ? s : s.substring(0, max) + "…";
     }
 
     // ------------------------------------------------------------------ information gathering

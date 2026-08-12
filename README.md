@@ -72,7 +72,9 @@ Both providers are called directly with **your own key/token** — it does **not
   values, discovered secrets/tokens (masked), request/response headers, cookies, technologies, hosts,
   emails) that keeps accumulating across repeat requests, **plus** deduplicated security findings
   (missing headers, insecure cookies, CORS misconfig, JWT/secret exposure, verbose errors, reflected
-  params, …) with recurrence counts. Different paths are tracked as different endpoints. The chat AI
+  params, **exposed source maps**, **GraphQL endpoints / introspection left enabled**,
+  **entropy‑based hard‑coded secrets**, **open‑redirect‑prone parameters**, …) with recurrence
+  counts. Different paths are tracked as different endpoints. The chat AI
   reads it via `get_recon_data` and `get_passive_findings`. Optional, throttled **AI enrichment** can
   add a deeper pass on new endpoints.
 - **Web search (Puter)** — Puter's built‑in `web_search` tool is enabled for OpenAI models, so the
