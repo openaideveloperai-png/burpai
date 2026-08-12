@@ -14,11 +14,18 @@ import burp.api.montoya.scanner.AuditConfiguration;
 import burp.api.montoya.scanner.BuiltInAuditConfiguration;
 import burp.api.montoya.scanner.audit.Audit;
 import burp.api.montoya.scanner.audit.issues.AuditIssue;
+import burp.api.montoya.collaborator.CollaboratorPayload;
+import burp.api.montoya.collaborator.Interaction;
+import burp.api.montoya.http.message.params.HttpParameterType;
+import com.example.burpgemini.hunt.IdentityStore;
+import com.example.burpgemini.hunt.OastManager;
+import com.example.burpgemini.hunt.Payloads;
 import com.example.burpgemini.recon.FindingsStore;
 import com.example.burpgemini.recon.InfoStore;
 import com.example.burpgemini.recon.PassiveFinding;
 import com.example.burpgemini.util.BurpContext;
 import com.example.burpgemini.util.ContentExtractor;
+import com.example.burpgemini.util.ResponseDiff;
 import com.example.burpgemini.util.TextDiff;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
@@ -32,6 +39,10 @@ import java.util.Base64;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 
 /**
  * Maps a Gemini function call (name + args) to concrete Montoya operations and returns a compact,
@@ -48,12 +59,17 @@ public final class ToolExecutor {
     private final MontoyaApi api;
     private final FindingsStore findings;
     private final InfoStore info;
+    private final OastManager oast;
+    private final IdentityStore identities;
 
-    public ToolExecutor(BurpContext ctx, FindingsStore findings, InfoStore info) {
+    public ToolExecutor(BurpContext ctx, FindingsStore findings, InfoStore info,
+                        OastManager oast, IdentityStore identities) {
         this.ctx = ctx;
         this.api = ctx.api();
         this.findings = findings;
         this.info = info;
+        this.oast = oast;
+        this.identities = identities;
     }
 
     /** A resolved captured item, normalised across proxy/sitemap/selection sources. */
@@ -86,10 +102,32 @@ public final class ToolExecutor {
                     return getReconData(args);
                 case "extract_from_captured":
                     return extractFromCaptured(args);
+                case "analyze_client_side":
+                    return analyzeClientSide(args);
                 case "fetch_url":
                     return fetchUrl(args);
                 case "fetch_common_paths":
                     return fetchCommonPaths(args);
+                case "create_oast_payload":
+                    return createOastPayload(args);
+                case "poll_oast_interactions":
+                    return pollOastInteractions(args);
+                case "compare_responses":
+                    return compareResponses(args);
+                case "set_identity":
+                    return setIdentity(args);
+                case "list_identities":
+                    return listIdentities();
+                case "authz_matrix":
+                    return authzMatrix(args);
+                case "test_injection":
+                    return testInjection(args);
+                case "discover_params":
+                    return discoverParams(args);
+                case "race_requests":
+                    return raceRequests(args);
+                case "report_finding":
+                    return reportFinding(args);
                 case "decode_transform":
                     return decodeTransform(args);
                 case "send_to_repeater":
@@ -819,7 +857,11 @@ public final class ToolExecutor {
             "/openapi.json", "/api-docs", "/v2/api-docs", "/graphql", "/graphiql",
             "/.svn/entries", "/wp-json/", "/wp-login.php", "/admin", "/administrator", "/login",
             "/backup.zip", "/backup.sql", "/dump.sql", "/.npmrc", "/elmah.axd", "/trace.axd",
-            "/.well-known/openid-configuration"
+            "/.well-known/openid-configuration",
+            // source maps + CI/CD config (source/secret disclosure)
+            "/main.js.map", "/app.js.map", "/bundle.js.map", "/index.js.map",
+            "/.gitlab-ci.yml", "/.circleci/config.yml", "/Jenkinsfile", "/.travis.yml",
+            "/.git-credentials", "/.aws/credentials", "/config/database.yml", "/appsettings.json",
     };
 
     private JsonObject extractFromCaptured(JsonObject args) {
@@ -933,6 +975,566 @@ public final class ToolExecutor {
         return b + p;
     }
 
+    // ------------------------------------------------------------------ OAST (out-of-band)
+
+    private JsonObject createOastPayload(JsonObject args) {
+        String label = getStr(args, "label", null);
+        try {
+            CollaboratorPayload p = oast.generate(label);
+            JsonObject r = new JsonObject();
+            r.addProperty("payload_domain", p.toString());
+            r.addProperty("payload_url", "http://" + p);
+            r.addProperty("interaction_id", p.id().toString());
+            if (label != null) {
+                r.addProperty("label", label);
+            }
+            r.addProperty("note", "Inject this domain/URL into a candidate BLIND sink (SSRF/XXE/blind "
+                    + "XSS/SQLi/RCE) — e.g. via test_injection oracle=oob, or send_http_request. Then "
+                    + "call poll_oast_interactions to see DNS/HTTP callbacks.");
+            return r;
+        } catch (Throwable t) {
+            return error("Collaborator/OAST is unavailable (disabled or blocked): " + t.getMessage());
+        }
+    }
+
+    private JsonObject pollOastInteractions(JsonObject args) {
+        String label = getStr(args, "label", null);
+        try {
+            List<Interaction> list = oast.poll();
+            JsonArray arr = new JsonArray();
+            for (Interaction i : list) {
+                String cd = i.customData().orElse("");
+                if (label != null && !label.isBlank() && !label.equals(cd)) {
+                    continue;
+                }
+                JsonObject o = new JsonObject();
+                o.addProperty("type", i.type().name());
+                o.addProperty("time", i.timeStamp() == null ? "" : i.timeStamp().toString());
+                try {
+                    o.addProperty("client_ip", i.clientIp() == null ? "" : i.clientIp().getHostAddress());
+                } catch (RuntimeException ignored) {
+                    // no client ip
+                }
+                if (!cd.isEmpty()) {
+                    o.addProperty("label", cd);
+                }
+                arr.add(o);
+            }
+            JsonObject r = new JsonObject();
+            r.add("interactions", arr);
+            r.addProperty("count", arr.size());
+            if (arr.size() == 0) {
+                r.addProperty("note", "No callbacks yet. Blind bugs can take seconds to minutes — poll "
+                        + "again after injecting the payload.");
+            }
+            return r;
+        } catch (Throwable t) {
+            return error("OAST poll failed: " + t.getMessage());
+        }
+    }
+
+    // ------------------------------------------------------------------ identities / access control
+
+    private JsonObject setIdentity(JsonObject args) {
+        String name = getStr(args, "name", null);
+        if (name == null || name.isBlank()) {
+            return error("name is required");
+        }
+        Map<String, String> headers = new LinkedHashMap<>();
+        if (args.has("headers") && args.get("headers").isJsonObject()) {
+            for (Map.Entry<String, JsonElement> e : args.getAsJsonObject("headers").entrySet()) {
+                if (e.getValue().isJsonPrimitive()) {
+                    headers.put(e.getKey(), e.getValue().getAsString());
+                }
+            }
+        }
+        if (headers.isEmpty()) {
+            return error("Provide at least one auth header in 'headers' (e.g. Cookie, Authorization, apikey).");
+        }
+        identities.set(name, headers);
+        JsonObject r = new JsonObject();
+        r.addProperty("stored", true);
+        r.addProperty("name", name);
+        r.addProperty("header_count", headers.size());
+        return r;
+    }
+
+    private JsonObject listIdentities() {
+        JsonArray arr = new JsonArray();
+        for (String n : identities.names()) {
+            arr.add(n);
+        }
+        JsonObject r = new JsonObject();
+        r.add("identities", arr);
+        r.addProperty("note", "Use these with authz_matrix. The special identity '"
+                + IdentityStore.UNAUTH + "' strips all auth headers.");
+        return r;
+    }
+
+    private JsonObject authzMatrix(JsonObject args) {
+        HttpRequest base;
+        try {
+            base = buildRequestFromSpec(args);
+        } catch (IllegalArgumentException e) {
+            return error(e.getMessage());
+        }
+        // Reference = the request as captured (the authorized user's own identity).
+        HttpRequestResponse ref = api.http().sendRequest(base);
+        int refStatus = statusOf(ref);
+        String refBody = bodyStr(ref);
+
+        List<String> names = new ArrayList<>();
+        if (args.has("identities") && args.get("identities").isJsonArray()) {
+            for (JsonElement e : args.getAsJsonArray("identities")) {
+                names.add(e.getAsString());
+            }
+        } else {
+            names.addAll(identities.names());
+            names.add(IdentityStore.UNAUTH);
+        }
+
+        JsonArray rows = new JsonArray();
+        for (String name : names) {
+            if (!identities.has(name)) {
+                continue;
+            }
+            HttpRequest r2 = identities.apply(base, name);
+            HttpRequestResponse rr = api.http().sendRequest(r2);
+            int st = statusOf(rr);
+            double sim = ResponseDiff.similarity(refBody, bodyStr(rr));
+            boolean flag = (st == 200 || st == 201) && sim >= 0.9;
+            JsonObject row = new JsonObject();
+            row.addProperty("identity", name);
+            row.addProperty("status", st);
+            row.addProperty("similarity_to_authorized", Math.round(sim * 1000) / 1000.0);
+            row.addProperty("possible_broken_access_control", flag);
+            rows.add(row);
+        }
+        JsonObject r = new JsonObject();
+        r.addProperty("authorized_status", refStatus);
+        r.addProperty("url", base.url());
+        r.add("matrix", rows);
+        r.addProperty("note", "A lower-privilege / unauthenticated identity returning a 200 that closely "
+                + "matches the authorized response is a likely IDOR/BOLA/broken-access-control. Verify "
+                + "the data actually belongs to another user.");
+        return r;
+    }
+
+    // ------------------------------------------------------------------ oracle-based injection
+
+    private JsonObject testInjection(JsonObject args) {
+        String cls = getStr(args, "inject_class", "").toLowerCase();
+        String param = getStr(args, "param_name", null);
+        String type = getStr(args, "param_type", "url");
+        if (param == null && !"oob".equals(cls)) {
+            return error("param_name is required");
+        }
+        HttpRequest base;
+        try {
+            base = buildRequestFromSpec(args);
+        } catch (IllegalArgumentException e) {
+            return error(e.getMessage());
+        }
+        switch (cls) {
+            case "ssti":
+                return oracleSsti(base, param, type);
+            case "sqli_error":
+                return oracleError(base, param, type, "SQL injection (error-based)", "High",
+                        Payloads.SQLI_ERROR, Payloads.SQL_ERROR_SIGNS);
+            case "path_traversal":
+                return oracleError(base, param, type, "Path traversal", "High",
+                        Payloads.PATH_TRAVERSAL, Payloads.TRAVERSAL_SIGNS);
+            case "sqli_time":
+                return oracleTime(base, param, type, "SQL injection (time-based)", Payloads.SQLI_TIME);
+            case "cmdi_time":
+                return oracleTime(base, param, type, "Command injection (time-based)", Payloads.CMDI_TIME);
+            case "sqli_boolean":
+                return oracleBoolean(base, param, type);
+            case "oob":
+                return oracleOob(base, param, type, getStr(args, "oast_domain", null));
+            default:
+                return error("Unknown inject_class. Use: ssti, sqli_error, sqli_time, sqli_boolean, "
+                        + "cmdi_time, path_traversal, oob.");
+        }
+    }
+
+    private JsonObject oracleSsti(HttpRequest base, String param, String type) {
+        for (String p : Payloads.SSTI) {
+            HttpRequest r = injectParam(base, param, type, p);
+            String body = bodyStr(api.http().sendRequest(r));
+            if (body.contains("49") && !body.contains(p)) {
+                return vulnFinding("SSTI (server-side template injection)", "High", "Firm",
+                        r.url(), param, "math", "Payload " + p + " evaluated to 49 in the response.", p);
+            }
+        }
+        return notVuln("SSTI", param);
+    }
+
+    private JsonObject oracleError(HttpRequest base, String param, String type, String cls, String sev,
+                                   String[] payloads, String[] signs) {
+        for (String p : payloads) {
+            HttpRequest r = injectParam(base, param, type, p);
+            String body = bodyStr(api.http().sendRequest(r));
+            for (String sign : signs) {
+                if (body.contains(sign)) {
+                    return vulnFinding(cls, sev, "Firm", r.url(), param, "error/echo",
+                            "Payload " + p + " triggered: " + sign, p);
+                }
+            }
+        }
+        return notVuln(cls, param);
+    }
+
+    private JsonObject oracleTime(HttpRequest base, String param, String type, String cls, String[] payloads) {
+        long baseline = sendTimedMs(injectParam(base, param, type, "az123"));
+        long bestDelta = 0;
+        for (String p : payloads) {
+            long ms = sendTimedMs(injectParam(base, param, type, p));
+            long delta = ms - baseline;
+            bestDelta = Math.max(bestDelta, delta);
+            if (delta > 4000) {
+                JsonObject o = vulnFinding(cls, "High", "Firm", base.url(), param, "time",
+                        "Payload " + p + " delayed the response by ~" + delta + "ms (baseline "
+                        + baseline + "ms).", p);
+                o.addProperty("baseline_ms", baseline);
+                o.addProperty("delayed_ms", ms);
+                return o;
+            }
+        }
+        JsonObject o = notVuln(cls, param);
+        o.addProperty("baseline_ms", baseline);
+        o.addProperty("max_delta_ms", bestDelta);
+        return o;
+    }
+
+    private JsonObject oracleBoolean(HttpRequest base, String param, String type) {
+        String refBody = bodyStr(api.http().sendRequest(injectParam(base, param, type, "az123")));
+        int n = Math.min(Payloads.SQLI_BOOL_TRUE.length, Payloads.SQLI_BOOL_FALSE.length);
+        for (int i = 0; i < n; i++) {
+            String tBody = bodyStr(api.http().sendRequest(injectParam(base, param, type, Payloads.SQLI_BOOL_TRUE[i])));
+            String fBody = bodyStr(api.http().sendRequest(injectParam(base, param, type, Payloads.SQLI_BOOL_FALSE[i])));
+            double simTrue = ResponseDiff.similarity(refBody, tBody);
+            double simFalse = ResponseDiff.similarity(refBody, fBody);
+            if (simTrue >= 0.9 && simFalse < 0.7) {
+                return vulnFinding("SQL injection (boolean-based)", "Medium", "Tentative", base.url(),
+                        param, "boolean", "TRUE condition ~= baseline (sim " + round(simTrue)
+                        + ") while FALSE differs (sim " + round(simFalse) + ").",
+                        Payloads.SQLI_BOOL_TRUE[i]);
+            }
+        }
+        return notVuln("SQL injection (boolean-based)", param);
+    }
+
+    private JsonObject oracleOob(HttpRequest base, String param, String type, String domain) {
+        if (domain == null || domain.isBlank()) {
+            return error("oast_domain is required for the oob oracle — call create_oast_payload first.");
+        }
+        HttpRequest r = injectParam(base, param == null ? "url" : param, type, "http://" + domain + "/");
+        api.http().sendRequest(r);
+        JsonObject o = new JsonObject();
+        o.addProperty("class", "oob (blind SSRF/XXE/RCE)");
+        o.addProperty("injected", true);
+        o.addProperty("url", r.url());
+        o.addProperty("note", "Injected the OAST URL. Call poll_oast_interactions to check for a callback; "
+                + "a DNS/HTTP hit confirms the blind vulnerability.");
+        return o;
+    }
+
+    // ------------------------------------------------------------------ param discovery & race
+
+    private static final String[] DEFAULT_PARAMS = {
+            "id", "user", "user_id", "uid", "account", "admin", "debug", "test", "role", "page",
+            "redirect", "url", "next", "return", "returnUrl", "callback", "file", "path", "dir",
+            "search", "q", "query", "lang", "format", "view", "action", "cmd", "exec", "include",
+            "template", "name", "email", "token", "key", "order", "sort", "limit", "offset", "filter",
+            "type", "mode", "status", "enable", "preview", "draft", "json", "xml", "download",
+    };
+
+    private JsonObject discoverParams(JsonObject args) {
+        HttpRequest base;
+        try {
+            base = buildRequestFromSpec(args);
+        } catch (IllegalArgumentException e) {
+            return error(e.getMessage());
+        }
+        String[] words = customList(args, "wordlist", DEFAULT_PARAMS);
+        HttpRequestResponse baseRR = api.http().sendRequest(base);
+        int baseStatus = statusOf(baseRR);
+        String baseBody = bodyStr(baseRR);
+
+        JsonArray hits = new JsonArray();
+        int tried = 0;
+        for (String w : words) {
+            if (tried >= 60) {
+                break;
+            }
+            tried++;
+            String canary = "zqx" + tried + "cn";
+            HttpRequest r = injectParam(base, w, "url", canary);
+            HttpRequestResponse rr = api.http().sendRequest(r);
+            String body = bodyStr(rr);
+            boolean reflected = body.contains(canary);
+            JsonObject cmp = ResponseDiff.compare(baseStatus, baseBody, statusOf(rr), body);
+            boolean changed = cmp.get("significantly_different").getAsBoolean();
+            if (reflected || changed) {
+                JsonObject o = new JsonObject();
+                o.addProperty("param", w);
+                o.addProperty("reflected", reflected);
+                o.addProperty("status", statusOf(rr));
+                o.addProperty("changed_response", changed);
+                hits.add(o);
+            }
+        }
+        JsonObject r = new JsonObject();
+        r.addProperty("tried", tried);
+        r.addProperty("candidates_found", hits.size());
+        r.add("params", hits);
+        r.addProperty("note", "Reflected or response-changing params are worth testing for injection/IDOR.");
+        return r;
+    }
+
+    private JsonObject raceRequests(JsonObject args) {
+        HttpRequest req;
+        try {
+            req = buildRequestFromSpec(args);
+        } catch (IllegalArgumentException e) {
+            return error(e.getMessage());
+        }
+        int count = Math.min(getInt(args, "count", 20), 30);
+        ExecutorService pool = Executors.newFixedThreadPool(Math.min(count, 20));
+        List<Future<Integer>> futures = new ArrayList<>();
+        try {
+            for (int i = 0; i < count; i++) {
+                futures.add(pool.submit(() -> statusOf(api.http().sendRequest(req))));
+            }
+            Map<String, Integer> dist = new LinkedHashMap<>();
+            for (Future<Integer> f : futures) {
+                int st;
+                try {
+                    st = f.get(30, TimeUnit.SECONDS);
+                } catch (Exception e) {
+                    st = 0;
+                }
+                dist.merge(String.valueOf(st), 1, Integer::sum);
+            }
+            JsonObject distObj = new JsonObject();
+            dist.forEach(distObj::addProperty);
+            JsonObject r = new JsonObject();
+            r.addProperty("sent", count);
+            r.addProperty("url", req.url());
+            r.add("status_distribution", distObj);
+            r.addProperty("note", "Look for a minority status/behaviour that differs from the pack — a "
+                    + "limit-bypass / double-spend / TOCTOU race signal.");
+            return r;
+        } finally {
+            pool.shutdownNow();
+        }
+    }
+
+    // ------------------------------------------------------------------ client-side analysis & findings
+
+    private JsonObject analyzeClientSide(JsonObject args) {
+        Item item = resolve(getStr(args, "source", "proxy"), getStr(args, "id", null));
+        if (item == null || item.response == null) {
+            return error("No captured response for that source/id.");
+        }
+        String body = item.response.bodyToString();
+        String scan = body.length() > 400_000 ? body.substring(0, 400_000) : body;
+
+        JsonArray sinks = new JsonArray();
+        for (String s : Payloads.JS_SINKS) {
+            int idx = scan.indexOf(s);
+            if (idx >= 0) {
+                JsonObject o = new JsonObject();
+                o.addProperty("sink", s);
+                o.addProperty("snippet", snippetAt(scan, idx));
+                sinks.add(o);
+            }
+        }
+        JsonObject r = new JsonObject();
+        r.addProperty("url", item.url);
+        r.add("dangerous_sinks", sinks);
+        r.addProperty("postmessage_handlers",
+                countOccurrences(scan, "addEventListener(\"message\"")
+                        + countOccurrences(scan, "addEventListener('message'")
+                        + countOccurrences(scan, "onmessage"));
+        JsonArray proto = new JsonArray();
+        for (String pat : new String[]{"__proto__", "constructor.prototype", "prototype["}) {
+            if (scan.contains(pat)) {
+                proto.add(pat);
+            }
+        }
+        r.add("prototype_pollution_hints", proto);
+
+        // CSP (from the response header) — flag weaknesses.
+        String csp = item.response.headerValue("Content-Security-Policy");
+        JsonObject cspObj = new JsonObject();
+        cspObj.addProperty("present", csp != null);
+        if (csp != null) {
+            JsonArray weak = new JsonArray();
+            String lc = csp.toLowerCase();
+            if (lc.contains("unsafe-inline")) {
+                weak.add("'unsafe-inline' allows inline scripts (XSS-friendly)");
+            }
+            if (lc.contains("unsafe-eval")) {
+                weak.add("'unsafe-eval' allows eval()");
+            }
+            if (lc.contains("*")) {
+                weak.add("wildcard source present");
+            }
+            if (!lc.contains("object-src")) {
+                weak.add("no object-src (plugin/XSS vector)");
+            }
+            cspObj.add("weaknesses", weak);
+        }
+        r.add("csp", cspObj);
+        r.addProperty("note", "Sinks fed from user-controlled sources (location/hash/postMessage/name) "
+                + "are DOM-XSS candidates; verify the source→sink data flow.");
+        return r;
+    }
+
+    private JsonObject reportFinding(JsonObject args) {
+        String type = getStr(args, "type", null);
+        if (type == null || type.isBlank()) {
+            return error("type is required");
+        }
+        String sev = getStr(args, "severity", "Info");
+        String conf = getStr(args, "confidence", "Tentative");
+        String url = getStr(args, "url", "");
+        String evidence = getStr(args, "evidence", "");
+        String repro = getStr(args, "repro", null);
+        String full = repro == null || repro.isBlank() ? evidence : evidence + " | Repro: " + repro;
+        boolean isNew = findings.addFinding(new PassiveFinding(type, sev, conf, url, full, true));
+        JsonObject r = new JsonObject();
+        r.addProperty("recorded", true);
+        r.addProperty("new", isNew);
+        r.addProperty("note", isNew ? "Added to the AI Recon findings." : "Already recorded (deduped).");
+        return r;
+    }
+
+    private JsonObject compareResponses(JsonObject args) {
+        Item a = resolve(getStr(args, "a_source", "proxy"), getStr(args, "a_id", null));
+        Item b = resolve(getStr(args, "b_source", "proxy"), getStr(args, "b_id", null));
+        if (a == null || b == null) {
+            return error("Provide a_source/a_id and b_source/b_id for two captured items.");
+        }
+        int sa = a.response != null ? a.response.statusCode() : 0;
+        int sb = b.response != null ? b.response.statusCode() : 0;
+        String ba = a.response != null ? a.response.bodyToString() : "";
+        String bb = b.response != null ? b.response.bodyToString() : "";
+        JsonObject r = ResponseDiff.compare(sa, ba, sb, bb);
+        r.addProperty("a_url", a.url);
+        r.addProperty("b_url", b.url);
+        return r;
+    }
+
+    // ---- oracle / hunt helpers ---------------------------------------------
+
+    private HttpRequest injectParam(HttpRequest req, String name, String type, String value) {
+        String t = type == null ? "url" : type.toLowerCase();
+        if ("header".equals(t)) {
+            return req.hasHeader(name) ? req.withUpdatedHeader(name, value) : req.withAddedHeader(name, value);
+        }
+        return req.withParameter(HttpParameter.parameter(name, value, paramType(t)));
+    }
+
+    private static HttpParameterType paramType(String t) {
+        switch (t == null ? "url" : t.toLowerCase()) {
+            case "body":
+                return HttpParameterType.BODY;
+            case "cookie":
+                return HttpParameterType.COOKIE;
+            case "json":
+                return HttpParameterType.JSON;
+            default:
+                return HttpParameterType.URL;
+        }
+    }
+
+    private long sendTimedMs(HttpRequest req) {
+        long start = System.nanoTime();
+        try {
+            api.http().sendRequest(req);
+        } catch (RuntimeException ignored) {
+            // timing still meaningful on failure
+        }
+        return (System.nanoTime() - start) / 1_000_000L;
+    }
+
+    private static int statusOf(HttpRequestResponse rr) {
+        return rr != null && rr.response() != null ? rr.response().statusCode() : 0;
+    }
+
+    private static String bodyStr(HttpRequestResponse rr) {
+        return rr != null && rr.response() != null ? rr.response().bodyToString() : "";
+    }
+
+    private static JsonObject vulnFinding(String cls, String sev, String conf, String url, String param,
+                                          String oracle, String evidence, String payload) {
+        JsonObject o = new JsonObject();
+        o.addProperty("class", cls);
+        o.addProperty("vulnerable", true);
+        o.addProperty("severity", sev);
+        o.addProperty("confidence", conf);
+        o.addProperty("url", url);
+        if (param != null) {
+            o.addProperty("param", param);
+        }
+        o.addProperty("oracle", oracle);
+        o.addProperty("evidence", evidence);
+        if (payload != null) {
+            o.addProperty("payload", payload);
+        }
+        o.addProperty("note", "Verify by re-testing to kill false positives, then record with report_finding.");
+        return o;
+    }
+
+    private static JsonObject notVuln(String cls, String param) {
+        JsonObject o = new JsonObject();
+        o.addProperty("class", cls);
+        o.addProperty("vulnerable", false);
+        if (param != null) {
+            o.addProperty("param", param);
+        }
+        o.addProperty("note", "No oracle signal — inconclusive (not necessarily safe). Try another class "
+                + "or oracle, or a different parameter.");
+        return o;
+    }
+
+    private static double round(double v) {
+        return Math.round(v * 1000.0) / 1000.0;
+    }
+
+    private static String snippetAt(String hay, int idx) {
+        int start = Math.max(0, idx - 30);
+        int end = Math.min(hay.length(), idx + 90);
+        return hay.substring(start, end).replace("\r", " ").replace("\n", " ");
+    }
+
+    private static int countOccurrences(String hay, String needle) {
+        int n = 0;
+        int i = 0;
+        while ((i = hay.indexOf(needle, i)) >= 0) {
+            n++;
+            i += needle.length();
+        }
+        return n;
+    }
+
+    private static String[] customList(JsonObject args, String key, String[] def) {
+        if (args.has(key) && args.get(key).isJsonArray()) {
+            JsonArray a = args.getAsJsonArray(key);
+            if (a.size() > 0) {
+                String[] out = new String[a.size()];
+                for (int i = 0; i < a.size(); i++) {
+                    out[i] = a.get(i).getAsString();
+                }
+                return out;
+            }
+        }
+        return def;
+    }
+
     // ------------------------------------------------------------------ confirmation-card helpers
 
     /** Best-effort target URL(s) for the confirmation card and scope check. */
@@ -997,6 +1599,16 @@ public final class ToolExecutor {
                 case "fetch_common_paths":
                     urls.add(getStr(args, "base_url", ""));
                     break;
+                case "authz_matrix":
+                case "test_injection":
+                case "discover_params":
+                case "race_requests":
+                    try {
+                        urls.add(buildRequestFromSpec(args).url());
+                    } catch (RuntimeException ignored) {
+                        // unresolved base
+                    }
+                    break;
                 default:
                     break;
             }
@@ -1015,6 +1627,10 @@ public final class ToolExecutor {
             case "start_passive_audit":
             case "fetch_url":
             case "fetch_common_paths":
+            case "authz_matrix":
+            case "test_injection":
+            case "discover_params":
+            case "race_requests":
                 return true;
             default:
                 return false;
@@ -1045,6 +1661,16 @@ public final class ToolExecutor {
             case "fetch_common_paths":
                 return "Probe common recon/misconfig paths (robots.txt, sitemap, .git, .env, "
                         + "actuator, swagger, admin, …) on the target.";
+            case "authz_matrix":
+                return "Replay the request as multiple identities (and unauthenticated) to test access "
+                        + "control (IDOR/BOLA).";
+            case "test_injection":
+                return "Run an ACTIVE injection oracle (" + getStr(args, "inject_class", "?")
+                        + ") against parameter '" + getStr(args, "param_name", "?") + "'.";
+            case "discover_params":
+                return "Brute-force hidden parameters and detect which change the response.";
+            case "race_requests":
+                return "Fire " + getInt(args, "count", 20) + " CONCURRENT requests (race condition test).";
             default:
                 return tool;
         }
@@ -1101,6 +1727,15 @@ public final class ToolExecutor {
         }
         if ("fetch_common_paths".equals(tool)) {
             return customPaths(args).length + " path probes against " + getStr(args, "base_url", "");
+        }
+        if ("race_requests".equals(tool)) {
+            return Math.min(getInt(args, "count", 20), 30) + " concurrent requests";
+        }
+        if ("discover_params".equals(tool)) {
+            return "up to 60 parameter probes";
+        }
+        if ("test_injection".equals(tool)) {
+            return "several payloads for the " + getStr(args, "inject_class", "?") + " oracle";
         }
         return null;
     }

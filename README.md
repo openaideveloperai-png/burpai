@@ -50,9 +50,18 @@ Both providers are called directly with **your own key/token** — it does **not
   Approve/Deny card showing the target, scope status, a request **diff** (or request count/sample),
   the risk tier, and the model's rationale. Tier 3 is **always** confirmed, even if the global
   confirmation toggle is off.
+- **Detection primitives (real find‑rate, not just scanner)** — out‑of‑band **OAST/Collaborator**
+  (blind SSRF/XXE/RCE/XSS via `create_oast_payload` + `poll_oast_interactions`); a **multi‑identity
+  access‑control matrix** (`set_identity` → `authz_matrix`) for IDOR/BOLA; **oracle‑based
+  `test_injection`** (SSTI math, error/time/boolean SQLi, command‑injection timing, path traversal,
+  blind OOB); a **response‑diffing engine** (`compare_responses`, normalizes CSRF/timestamps/ids);
+  **`discover_params`**, **`race_requests`**, **`analyze_client_side`** (DOM‑XSS sinks / CSP), and
+  structured **`report_finding`** with a verify‑before‑report loop.
 - **⚡ Agent mode (auto‑approve)** — optional hands‑off mode that auto‑approves every action so the
   assistant runs end‑to‑end. Scope still blocks out‑of‑scope traffic; a loud banner shows while it's
-  on, and every action is still logged as a tool card.
+  on, and every action is still logged as a tool card. **Active‑exploitation tools (Tier 4) are the
+  one exception — they always stop for an explicit "I'm authorized" confirmation, even in Agent
+  mode.**
 - **Background passive recon ("AI Recon" tab)** — a read‑only passive scanner mines **every**
   in‑scope proxied request/response. It **gathers information** (parameter inventory with sample
   values, discovered secrets/tokens (masked), request/response headers, cookies, technologies, hosts,
@@ -233,7 +242,10 @@ and `get_passive_findings`, prioritise everything, and suggest next steps. Toggl
 | `list_proxy_history`, `get_request_response`, `get_site_map`, `get_selected_items`, `search_traffic`, `get_scope`, `get_passive_findings`, `get_recon_data`, `extract_from_captured`, `decode_transform` | **0 — auto** | Read‑only / local. No dialog. `get_recon_data` returns the gathered parameter/secret/header/cookie/tech inventory; `extract_from_captured` mines an already‑captured response for links/JS/endpoints/secrets. |
 | `send_to_repeater`, `add_to_scope`, `remove_from_scope`, `send_to_intruder` | **1 — confirm** | Stage in a Burp tool / edit scope. No new target traffic. Intruder is staged (Burp's API can't auto‑start an attack); set payloads and start it manually. |
 | `send_http_request`, `start_passive_audit`, `fetch_url` | **2 — confirm + warning** | Sends one request / runs passive checks. `fetch_url` fetches a URL and auto‑extracts links/JS/endpoints/secrets. |
+| `create_oast_payload`, `poll_oast_interactions`, `compare_responses`, `analyze_client_side`, `report_finding`, `list_identities` | **0 — auto** | OAST minting/polling, response diffing, client‑side analysis, structured findings — no target traffic. |
+| `set_identity` | **1 — confirm** | Stores an auth context (credentials) for the access‑control matrix. |
 | `start_active_audit`, `run_request_sequence`, `fetch_common_paths` | **3 — confirm + strong warning** | Active scan / a series of requests / probing many recon paths. Card shows the count and a sample; **always** confirmed. |
+| `test_injection`, `authz_matrix`, `discover_params`, `race_requests` | **4 — active exploit, authorized‑only** | Oracle injection, access‑control matrix, param brute‑force, concurrency races. **Always** requires an explicit "authorized" confirmation and is **never** auto‑approved — not even in Agent mode. |
 
 Unknown/unmapped tools default to Tier 3 (fail safe).
 

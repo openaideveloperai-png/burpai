@@ -67,9 +67,10 @@ public final class ConfirmationManager {
                     Decision.deny("Blocked: target is out of Burp scope and out-of-scope override is disabled."));
         }
 
-        // Agent mode: auto-approve everything that isn't scope-blocked (including Tier 3 and an
-        // out-of-scope override the operator explicitly enabled). No dialog.
-        if (settings.isAutoApprove()) {
+        // Agent mode: auto-approve everything that isn't scope-blocked — EXCEPT Tier 4 (active
+        // exploitation), which always stops for an explicit "authorized" confirmation even in Agent
+        // mode. No dialog otherwise.
+        if (settings.isAutoApprove() && !req.tier.neverAutoApprove()) {
             view.showAutoApproved(req, "Agent mode");
             return CompletableFuture.completedFuture(
                     new Decision(true, null, req.scope.requiresOverride));

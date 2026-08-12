@@ -195,6 +195,112 @@ public final class ToolRegistry {
                         p("delay_ms", intType("Delay between requests in milliseconds (default 0)."))
                 ), req("requests"))));
 
+        // ---- Detection primitives (out-of-band, access control, oracles) ---
+
+        d.add(new ToolSpec("create_oast_payload",
+                "Mint a unique Burp Collaborator (OAST) domain/URL to inject into blind sinks "
+                        + "(blind SSRF/XXE/RCE/XSS/SQLi). Read-only (no target traffic).",
+                obj(props(
+                        p("label", strType("Optional label to correlate later callbacks (customData)."))
+                ), req())));
+
+        d.add(new ToolSpec("poll_oast_interactions",
+                "Poll for out-of-band callbacks (DNS/HTTP/SMTP) received by the Collaborator client. "
+                        + "Read-only. Call after injecting an OAST payload.",
+                obj(props(
+                        p("label", strType("Only interactions matching this label (customData)."))
+                ), req())));
+
+        d.add(new ToolSpec("compare_responses",
+                "Diff two captured responses (normalized: CSRF tokens/timestamps/ids stripped) — status, "
+                        + "length and similarity. Read-only. Powers boolean/access-control reasoning.",
+                obj(props(
+                        p("a_source", enumType("Source for item A.", "proxy", "sitemap", "selection")),
+                        p("a_id", strType("Item A id.")),
+                        p("b_source", enumType("Source for item B.", "proxy", "sitemap", "selection")),
+                        p("b_id", strType("Item B id."))
+                ), req("a_source", "a_id", "b_source", "b_id"))));
+
+        d.add(new ToolSpec("analyze_client_side",
+                "Analyze a captured HTML/JS response for DOM-XSS sinks, postMessage handlers, prototype-"
+                        + "pollution hints and CSP weaknesses. Read-only.",
+                obj(props(
+                        p("source", enumType("Where the id comes from.", "proxy", "sitemap", "selection")),
+                        p("id", strType("Item id whose response body to analyze."))
+                ), req("source", "id"))));
+
+        d.add(new ToolSpec("report_finding",
+                "Record a structured, verified finding (adds it to the AI Recon findings, deduped). "
+                        + "Read-only.",
+                obj(props(
+                        p("type", strType("Vulnerability type, e.g. 'SQL injection (time-based)'.")),
+                        p("severity", enumType("Severity.", "Info", "Low", "Medium", "High")),
+                        p("confidence", enumType("Confidence.", "Tentative", "Firm", "Certain")),
+                        p("url", strType("Affected URL.")),
+                        p("evidence", strType("The concrete evidence.")),
+                        p("repro", strType("Optional short reproduction steps."))
+                ), req("type", "severity", "url", "evidence"))));
+
+        d.add(new ToolSpec("set_identity",
+                "Store an auth context (session cookies / bearer token / API key) under a name, for the "
+                        + "access-control matrix. Requires confirmation (handles credentials).",
+                obj(props(
+                        p("name", strType("Identity name, e.g. 'userA' or 'admin'.")),
+                        p("headers", objType("Auth headers to apply, e.g. {\"Cookie\":\"...\"} or "
+                                + "{\"Authorization\":\"Bearer ...\"}."))
+                ), req("name", "headers"))));
+
+        d.add(new ToolSpec("list_identities",
+                "List stored identities usable with authz_matrix. Read-only.",
+                obj(props(), req())));
+
+        d.add(new ToolSpec("authz_matrix",
+                "ACTIVE, authorized-only. Replay a captured request as each stored identity and "
+                        + "unauthenticated, and diff responses to flag broken access control (IDOR/BOLA).",
+                obj(props(
+                        p("base_id", strType("Base item id.")),
+                        p("base_source", enumType("Where base_id comes from.", "proxy", "sitemap", "selection")),
+                        p("identities", arrayOf(strType("An identity name."),
+                                "Optional subset of identities (default: all stored + unauthenticated)."))
+                ), req())));
+
+        d.add(new ToolSpec("test_injection",
+                "ACTIVE, authorized-only. Run an oracle-based injection test on a parameter and return a "
+                        + "structured result. Classes: ssti (math), sqli_error, sqli_time, sqli_boolean, "
+                        + "cmdi_time, path_traversal, oob (blind via OAST).",
+                obj(props(
+                        p("base_id", strType("Base item id.")),
+                        p("base_source", enumType("Where base_id comes from.", "proxy", "sitemap", "selection")),
+                        p("raw_request", strType("Optional raw request instead of a base id.")),
+                        p("param_name", strType("Parameter to inject into.")),
+                        p("param_type", enumType("Parameter location (default url).", "url", "body", "cookie", "json", "header")),
+                        p("inject_class", enumType("Injection class / oracle.",
+                                "ssti", "sqli_error", "sqli_time", "sqli_boolean", "cmdi_time", "path_traversal", "oob")),
+                        p("oast_domain", strType("For the 'oob' oracle: the OAST domain from create_oast_payload."))
+                ), req("inject_class"))));
+
+        d.add(new ToolSpec("discover_params",
+                "ACTIVE, authorized-only. Brute-force hidden parameters and detect which change the "
+                        + "response (reflection or a significant diff).",
+                obj(props(
+                        p("base_id", strType("Base item id.")),
+                        p("base_source", enumType("Where base_id comes from.", "proxy", "sitemap", "selection")),
+                        p("raw_request", strType("Optional raw request instead of a base id.")),
+                        p("wordlist", arrayOf(strType("A candidate parameter name."),
+                                "Optional custom wordlist (defaults to a built-in list)."))
+                ), req())));
+
+        d.add(new ToolSpec("race_requests",
+                "ACTIVE, authorized-only. Fire N concurrent copies of a request (race condition / "
+                        + "limit-bypass / TOCTOU) and report the status distribution.",
+                obj(props(
+                        p("base_id", strType("Base item id.")),
+                        p("base_source", enumType("Where base_id comes from.", "proxy", "sitemap", "selection")),
+                        p("raw_request", strType("Optional raw request instead of a base id.")),
+                        p("modifications", mutationArray()),
+                        p("count", intType("Number of concurrent requests (default 20, max 30)."))
+                ), req())));
+
         return d;
     }
 
@@ -236,6 +342,13 @@ public final class ToolRegistry {
 
     private static JsonObject strType(String desc) {
         return typed("string", desc);
+    }
+
+    /** A free-form object (map of string keys to string values). */
+    private static JsonObject objType(String desc) {
+        JsonObject o = typed("object", desc);
+        o.add("additionalProperties", typed("string", null));
+        return o;
     }
 
     private static JsonObject intType(String desc) {

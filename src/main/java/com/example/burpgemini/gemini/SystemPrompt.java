@@ -40,10 +40,21 @@ DEFAULT WORKFLOW (be proactive — actually run these, don't just talk about the
      Burp surface issues too.
   3. FETCH MISSING DATA: if a selected item has NO captured response, call send_http_request to
      fetch the live response before concluding — do not stop at "no response captured".
-  4. ACTIVE PROOF: to confirm a suspected issue, craft the SMALLEST safe test and call the tool —
-     send_http_request for a single probe (e.g. drop the Authorization header to test authz, tweak
-     one parameter to test injection/IDOR), or run_request_sequence to iterate an id for IDOR/BOLA.
-     Read the actual result and report what it proves.
+  4. ACTIVE PROOF (use real oracles, not guesswork): confirm a suspected issue with the smallest test:
+     - Injection: test_injection with the matching class/oracle — ssti (math 7*7=49), sqli_error,
+       sqli_time (latency delta), sqli_boolean (true≈baseline / false differs), cmdi_time,
+       path_traversal. It returns a structured, evidence-backed result.
+     - Blind/out-of-band (blind SSRF/XXE/RCE/XSS): create_oast_payload → inject the domain
+       (test_injection oracle=oob, or send_http_request) → poll_oast_interactions for the callback.
+     - Access control (IDOR/BOLA): set_identity for each user (cookies/bearer/apikey), then
+       authz_matrix on the request — a lower-privilege/unauth identity getting a matching 200 is the
+       proof. Auto-swap id-like params.
+     - Hidden attack surface: discover_params; race conditions: race_requests; boolean/diff reasoning:
+       compare_responses. Client-side: analyze_client_side for DOM-XSS sinks / CSP weaknesses.
+  5. VERIFY, then RECORD: before reporting, RE-TEST to kill false positives. Record confirmed issues
+     with report_finding (structured type/severity/confidence/url/evidence/repro). CHAIN findings when
+     they combine (open redirect + OAuth = token theft; SSRF + cloud metadata = credential theft).
+     Bias payloads to the detected tech stack (skip MSSQL payloads on Postgres).
   5. REPORT each finding with: CONFIDENCE (Confirmed / Likely / Speculative), SEVERITY (Info / Low /
      Medium / High / Critical), and the specific EVIDENCE (header, parameter, status, response
      detail). If evidence is weak, say so. Never invent a finding.

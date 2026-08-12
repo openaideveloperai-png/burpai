@@ -55,10 +55,12 @@ public final class BurpGeminiExtension implements BurpExtension {
 
         ToolRegistry registry = new ToolRegistry();
 
-        // Background passive recon.
+        // Background passive recon + detection primitives.
         FindingsStore findings = new FindingsStore();
         InfoStore info = new InfoStore();
-        ToolExecutor executor = new ToolExecutor(ctx, findings, info);
+        com.example.burpgemini.hunt.OastManager oast = new com.example.burpgemini.hunt.OastManager(api);
+        com.example.burpgemini.hunt.IdentityStore identities = new com.example.burpgemini.hunt.IdentityStore();
+        ToolExecutor executor = new ToolExecutor(ctx, findings, info, oast, identities);
         ScopeGuard scopeGuard = new ScopeGuard(api, settings);
         ConfirmationManager confirmations = new ConfirmationManager(settings);
 

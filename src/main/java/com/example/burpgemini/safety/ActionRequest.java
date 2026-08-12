@@ -38,9 +38,10 @@ public final class ActionRequest {
         this.successFailureHint = successFailureHint;
     }
 
-    /** Tier 3 requires the "authorized & in scope" checkbox. */
+    /** Tier 3 and Tier 4 require the "authorized & in scope" checkbox. */
     public boolean requiresAuthCheckbox() {
-        return tier == RiskTier.TIER3_CONFIRM_STRONG || scope.requiresOverride;
+        return tier == RiskTier.TIER3_CONFIRM_STRONG || tier == RiskTier.TIER4_AUTHORIZED
+                || scope.requiresOverride;
     }
 
     /** Out-of-scope override needs its own explicit red checkbox. */
