@@ -94,6 +94,19 @@ public final class ToolRegistry {
                         p("id", strType("Item id whose response body to analyze."))
                 ), req("source", "id"))));
 
+        d.add(new ToolSpec("to_curl",
+                "Render a captured (or modified) request as a copy-pasteable curl command. Read-only "
+                        + "(builds the string; sends nothing).",
+                obj(props(
+                        p("source", enumType("Where the id comes from.", "proxy", "sitemap", "selection")),
+                        p("id", strType("Item id to render.")),
+                        p("base_id", strType("Alternatively, a base id (with base_source) to derive from.")),
+                        p("base_source", enumType("Where base_id comes from.", "proxy", "sitemap", "selection")),
+                        p("raw_request", strType("Or a full raw HTTP request to render.")),
+                        p("modifications", mutationArray()),
+                        p("include_body", boolType("Include the request body (default true)."))
+                ), req())));
+
         d.add(new ToolSpec("decode_transform",
                 "Locally decode/encode a string (no target traffic). JWT decode is non-verifying, header/payload only.",
                 obj(props(
@@ -184,6 +197,27 @@ public final class ToolRegistry {
                         p("base_url", strType("Target base URL, e.g. https://app.example.com")),
                         p("paths", arrayOf(strType("A path to probe, e.g. /robots.txt."),
                                 "Optional custom path list (defaults to the built-in recon list)."))
+                ), req("base_url"))));
+
+        d.add(new ToolSpec("probe_paths",
+                "Probe site/API paths on a base URL and classify each (accessible / protected / "
+                        + "redirect / missing / error). By default it probes the paths recon and "
+                        + "mine_javascript already DISCOVERED for that host — so you hit the real attack "
+                        + "surface, not just a wordlist. Safe methods only (GET/HEAD/OPTIONS), in-scope "
+                        + "URLs only. Sends many requests — requires strong confirmation. Auto-records "
+                        + "accessible/protected sensitive paths as findings.",
+                obj(props(
+                        p("base_url", strType("Target base URL, e.g. https://app.example.com")),
+                        p("paths", arrayOf(strType("A path or absolute URL to probe, e.g. /api/v2/users."),
+                                "Optional explicit paths to probe (merged with discovered ones).")),
+                        p("use_discovered", boolType("Also probe paths discovered by recon/JS mining for "
+                                + "this host (default true).")),
+                        p("method", enumType("Safe HTTP method (default GET).", "GET", "HEAD", "OPTIONS")),
+                        p("expand_parents", boolType("Also probe parent directories of each path (default false).")),
+                        p("check_backups", boolType("Also try backup suffixes (.bak/.old/~/.zip) on file "
+                                + "paths (default false).")),
+                        p("max", intType("Max probes to send (default 80, max 200).")),
+                        p("delay_ms", intType("Delay between probes in ms (default 0)."))
                 ), req("base_url"))));
 
         d.add(new ToolSpec("run_request_sequence",

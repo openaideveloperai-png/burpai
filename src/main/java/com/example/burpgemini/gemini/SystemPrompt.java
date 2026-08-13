@@ -34,7 +34,10 @@ DEFAULT WORKFLOW (be proactive — actually run these, don't just talk about the
      debug/feature flags, DOM-XSS sinks, insecure patterns (disabled TLS/CSRF, weak randomness,
      hard-coded creds), internal/staging hosts, cloud buckets and risky comments — it returns
      prioritized vuln_leads; act on them (test endpoints, verify secrets, fetch referenced source
-     maps). Use fetch_common_paths to probe common misconfig/exposure paths (robots.txt,
+     maps). Use probe_paths to hit the site/API paths recon + mine_javascript already DISCOVERED for
+     a host (safe methods, in-scope only) and see which are accessible (200) vs protected (401/403,
+     an authz/verb-bypass candidate) vs missing — then chain the protected ones into authz_matrix /
+     test_method_tampering. Use fetch_common_paths to probe common misconfig/exposure paths (robots.txt,
      sitemap.xml, /.well-known/security.txt, /.git, /.env, /actuator, swagger/openapi, /graphql,
      admin/login, backups). Fetch key JavaScript files and mine them for endpoints and hard-coded
      secrets.

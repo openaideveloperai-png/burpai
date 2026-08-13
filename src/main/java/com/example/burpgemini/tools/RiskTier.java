@@ -75,6 +75,7 @@ public enum RiskTier {
         BY_TOOL.put("get_recon_data", TIER0_AUTO);
         BY_TOOL.put("extract_from_captured", TIER0_AUTO);
         BY_TOOL.put("decode_transform", TIER0_AUTO);
+        BY_TOOL.put("to_curl", TIER0_AUTO);
         BY_TOOL.put("create_oast_payload", TIER0_AUTO);
         BY_TOOL.put("poll_oast_interactions", TIER0_AUTO);
         BY_TOOL.put("compare_responses", TIER0_AUTO);
@@ -113,6 +114,7 @@ public enum RiskTier {
         BY_TOOL.put("start_active_audit", TIER3_CONFIRM_STRONG);
         BY_TOOL.put("run_request_sequence", TIER3_CONFIRM_STRONG);
         BY_TOOL.put("fetch_common_paths", TIER3_CONFIRM_STRONG);
+        BY_TOOL.put("probe_paths", TIER3_CONFIRM_STRONG);
     }
 
     /** Unknown tools default to the strongest gate: fail safe, never fail open. */

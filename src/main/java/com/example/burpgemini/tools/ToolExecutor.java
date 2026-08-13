@@ -111,6 +111,8 @@ public final class ToolExecutor {
                     return fetchUrl(args);
                 case "fetch_common_paths":
                     return fetchCommonPaths(args);
+                case "probe_paths":
+                    return probePaths(args);
                 case "create_oast_payload":
                     return createOastPayload(args);
                 case "poll_oast_interactions":
@@ -139,6 +141,8 @@ public final class ToolExecutor {
                     return reportFinding(args);
                 case "decode_transform":
                     return decodeTransform(args);
+                case "to_curl":
+                    return toCurl(args);
                 case "send_to_repeater":
                     return sendToRepeater(args);
                 case "add_to_scope":
@@ -964,6 +968,293 @@ public final class ToolExecutor {
         return r;
     }
 
+    /** Sensitive path fragments whose accessibility (or protected-ness) is a finding. */
+    private static final String[] SENSITIVE_PATHS = {
+            "admin", "config", "backup", "/.git", "/.env", "/.svn", "actuator", "debug", "swagger",
+            "openapi", "graphql", "phpinfo", "console", "internal", "wp-admin", "server-status",
+            "metrics", "/trace", "dump", "credential", "secret", "id_rsa", "/.ds_store", "/.htaccess",
+            "/.aws", "/.npmrc", "database", "/db", "/logs", "/private", "/setup", "/install",
+    };
+
+    /**
+     * Probe a set of paths on a base URL and classify each response. Pulls the paths the recon /
+     * JS miner already DISCOVERED (so you probe the real attack surface, not just a static wordlist),
+     * accepts an explicit list too, and can expand parent directories and common backup suffixes.
+     * Safe methods only (GET/HEAD/OPTIONS); in-scope URLs only.
+     */
+    private JsonObject probePaths(JsonObject args) {
+        String base = getStr(args, "base_url", null);
+        if (base == null || base.isBlank()) {
+            return error("base_url is required (e.g. https://app.example.com)");
+        }
+        String method = getStr(args, "method", "GET").toUpperCase();
+        if (!method.equals("GET") && !method.equals("HEAD") && !method.equals("OPTIONS")) {
+            return error("probe_paths only sends safe methods (GET/HEAD/OPTIONS). For verb testing use "
+                    + "test_method_tampering.");
+        }
+        boolean useDiscovered = getBool(args, "use_discovered", true);
+        boolean expandParents = getBool(args, "expand_parents", false);
+        boolean checkBackups = getBool(args, "check_backups", false);
+        int max = Math.min(getInt(args, "max", 80), 200);
+        int delayMs = Math.max(0, getInt(args, "delay_ms", 0));
+        String baseHost = hostOfUrl(base);
+
+        // Collect candidate paths (ordered, deduped).
+        java.util.LinkedHashSet<String> paths = new java.util.LinkedHashSet<>();
+        if (args.has("paths") && args.get("paths").isJsonArray()) {
+            for (JsonElement el : args.getAsJsonArray("paths")) {
+                addPath(paths, el.getAsString());
+            }
+        }
+        if (useDiscovered) {
+            for (FindingsStore.EndpointInfo ep : findings.endpointsSnapshot()) {
+                if (paths.size() > max * 2) {
+                    break;
+                }
+                String epHost = hostOfUrl(ep.sampleUrl);
+                if (baseHost != null && epHost != null && !baseHost.equalsIgnoreCase(epHost)) {
+                    continue; // only paths for the host we're probing
+                }
+                addPath(paths, pathOfUrl(ep.sampleUrl));
+            }
+        }
+        if (paths.isEmpty()) {
+            return error("No paths to probe. Provide 'paths', or run recon / mine_javascript first so "
+                    + "endpoints are discovered (then keep use_discovered=true).");
+        }
+        if (expandParents) {
+            for (String p : new ArrayList<>(paths)) {
+                for (String parent : parentDirs(p)) {
+                    addPath(paths, parent);
+                }
+            }
+        }
+        if (checkBackups) {
+            for (String p : new ArrayList<>(paths)) {
+                if (p.contains(".") && !p.endsWith("/")) {
+                    for (String suf : new String[]{".bak", ".old", "~", ".orig", ".save", ".zip"}) {
+                        addPath(paths, p + suf);
+                    }
+                }
+            }
+        }
+
+        JsonArray results = new JsonArray();
+        JsonArray interesting = new JsonArray();
+        Map<String, Integer> byClass = new LinkedHashMap<>();
+        int probed = 0;
+        int skippedScope = 0;
+        int recorded = 0;
+        for (String path : paths) {
+            if (probed >= max) {
+                break;
+            }
+            String full = joinUrl(base, path);
+            if (!isInScope(full)) {
+                skippedScope++;
+                continue;
+            }
+            try {
+                HttpRequestResponse rr = api.http().sendRequest(
+                        HttpRequest.httpRequestFromUrl(full).withMethod(method));
+                HttpResponse resp = rr.response();
+                int status = resp != null ? resp.statusCode() : 0;
+                int len = resp != null ? resp.body().length() : 0;
+                String ct = resp != null && resp.mimeType() != null ? resp.mimeType().toString() : "";
+                String loc = resp != null ? resp.headerValue("Location") : null;
+                probed++;
+                byClass.merge(statusClass(status), 1, Integer::sum);
+
+                JsonObject o = new JsonObject();
+                o.addProperty("path", path);
+                o.addProperty("url", full);
+                o.addProperty("status", status);
+                o.addProperty("length", len);
+                o.addProperty("content_type", ct);
+                if (loc != null) {
+                    o.addProperty("location", loc);
+                }
+                String verdict = probeVerdict(status);
+                o.addProperty("verdict", verdict);
+                boolean sensitive = isSensitivePath(path);
+                boolean note = !"not found".equals(verdict) && !"error/none".equals(verdict);
+                if (note) {
+                    results.add(o);
+                }
+                if (note && (sensitive || status == 200 || status == 401 || status == 403 || status == 500)) {
+                    interesting.add(o);
+                }
+                // Auto-record sensitive exposure / protected sensitive endpoints.
+                if (sensitive && (status == 200 || status == 201)) {
+                    if (findings.addFinding(new PassiveFinding("Sensitive path accessible", "Medium",
+                            "Firm", full, method + " " + status + " (" + len + "b) — sensitive path reachable.",
+                            true))) {
+                        recorded++;
+                    }
+                } else if (sensitive && (status == 401 || status == 403)) {
+                    if (findings.addFinding(new PassiveFinding("Sensitive path present (protected)", "Info",
+                            "Firm", full, method + " " + status + " — exists but access-controlled; "
+                            + "candidate for authz/verb bypass.", true))) {
+                        recorded++;
+                    }
+                }
+            } catch (RuntimeException e) {
+                // skip unresolvable/failed path
+            }
+            if (delayMs > 0) {
+                sleepQuietly(delayMs);
+            }
+        }
+        JsonObject dist = new JsonObject();
+        byClass.forEach(dist::addProperty);
+
+        JsonObject r = new JsonObject();
+        r.addProperty("base_url", base);
+        r.addProperty("candidates", paths.size());
+        r.addProperty("probed", probed);
+        r.addProperty("skipped_out_of_scope", skippedScope);
+        r.addProperty("findings_recorded", recorded);
+        r.add("status_distribution", dist);
+        r.add("interesting", interesting);
+        r.add("results", results);
+        r.addProperty("note", "200 = accessible; 401/403 = exists but protected (authz/verb-bypass "
+                + "candidate — try authz_matrix / test_method_tampering); 405 = method not allowed; "
+                + "5xx = server error. fetch_url a promising hit to mine it further.");
+        return r;
+    }
+
+    private static void addPath(java.util.LinkedHashSet<String> set, String raw) {
+        if (raw == null) {
+            return;
+        }
+        String p = raw.trim();
+        if (p.isEmpty()) {
+            return;
+        }
+        // Accept absolute URLs by reducing to their path.
+        if (p.startsWith("http://") || p.startsWith("https://")) {
+            p = pathOfUrl(p);
+        }
+        if (p == null || p.isEmpty()) {
+            return;
+        }
+        if (!p.startsWith("/")) {
+            p = "/" + p;
+        }
+        set.add(p);
+    }
+
+    private static List<String> parentDirs(String path) {
+        List<String> out = new ArrayList<>();
+        String p = path;
+        int guard = 0;
+        while (p.length() > 1 && guard++ < 8) {
+            int slash = p.lastIndexOf('/', p.endsWith("/") ? p.length() - 2 : p.length() - 1);
+            if (slash <= 0) {
+                break;
+            }
+            String parent = p.substring(0, slash + 1); // keep trailing slash
+            out.add(parent);
+            p = p.substring(0, slash);
+        }
+        return out;
+    }
+
+    private static boolean isSensitivePath(String path) {
+        String lc = path.toLowerCase();
+        for (String s : SENSITIVE_PATHS) {
+            if (lc.contains(s)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static String statusClass(int status) {
+        if (status >= 200 && status < 300) {
+            return "2xx";
+        }
+        if (status >= 300 && status < 400) {
+            return "3xx";
+        }
+        if (status >= 400 && status < 500) {
+            return "4xx";
+        }
+        if (status >= 500) {
+            return "5xx";
+        }
+        return "none";
+    }
+
+    private static String probeVerdict(int status) {
+        if (status >= 200 && status < 300) {
+            return "accessible";
+        }
+        if (status == 401 || status == 403) {
+            return "protected (exists)";
+        }
+        if (status == 405) {
+            return "method not allowed";
+        }
+        if (status >= 300 && status < 400) {
+            return "redirect";
+        }
+        if (status == 404 || status == 410) {
+            return "not found";
+        }
+        if (status >= 500) {
+            return "server error";
+        }
+        return "error/none";
+    }
+
+    private static String hostOfUrl(String url) {
+        try {
+            return java.net.URI.create(url).getHost();
+        } catch (RuntimeException e) {
+            return null;
+        }
+    }
+
+    /** scheme://host[:port] of a URL, or null. */
+    private static String originOf(String url) {
+        try {
+            java.net.URI u = java.net.URI.create(url);
+            if (u.getScheme() == null || u.getHost() == null) {
+                return null;
+            }
+            String port = u.getPort() > 0 ? ":" + u.getPort() : "";
+            return u.getScheme() + "://" + u.getHost() + port;
+        } catch (RuntimeException e) {
+            return null;
+        }
+    }
+
+    /** Resolve a mined endpoint (absolute or path-only) to an absolute URL against {@code origin}. */
+    private static String toAbsoluteUrl(String origin, String endpoint) {
+        if (endpoint == null || endpoint.isBlank()) {
+            return null;
+        }
+        String e = endpoint.trim();
+        if (e.startsWith("http://") || e.startsWith("https://")) {
+            return e;
+        }
+        if (origin == null || !e.startsWith("/")) {
+            return null; // skip relative/ambiguous fragments we can't anchor
+        }
+        return origin + e;
+    }
+
+    private static String pathOfUrl(String url) {
+        try {
+            java.net.URI u = java.net.URI.create(url);
+            String path = u.getRawPath();
+            return path == null || path.isEmpty() ? "/" : path;
+        } catch (RuntimeException e) {
+            return null;
+        }
+    }
+
     private static String[] customPaths(JsonObject args) {
         if (args.has("paths") && args.get("paths").isJsonArray()) {
             JsonArray a = args.getAsJsonArray("paths");
@@ -1534,6 +1825,53 @@ public final class ToolExecutor {
         return req.hasHeader(name) ? req.headerValue(name) : null;
     }
 
+    /** QoL: render a captured (or modified) request as a copy-pasteable curl command. Read-only. */
+    private JsonObject toCurl(JsonObject args) {
+        HttpRequest req;
+        try {
+            // Support both {source,id} and the {base_id,base_source,raw_request,modifications} spec.
+            if (getStr(args, "base_id", null) == null && getStr(args, "raw_request", null) == null
+                    && getStr(args, "id", null) != null) {
+                Item it = resolve(getStr(args, "source", "proxy"), getStr(args, "id", null));
+                if (it == null) {
+                    return error("No captured item for that source/id.");
+                }
+                req = applyMutations(it.request,
+                        args.has("modifications") ? args.getAsJsonArray("modifications") : null);
+            } else {
+                req = buildRequestFromSpec(args);
+            }
+        } catch (IllegalArgumentException e) {
+            return error(e.getMessage());
+        }
+        boolean includeBody = getBool(args, "include_body", true);
+        StringBuilder sb = new StringBuilder("curl -i -sS -X ").append(req.method())
+                .append(" '").append(shellQuote(req.url())).append('\'');
+        for (HttpHeader h : req.headers()) {
+            String n = h.name();
+            if (n == null || n.startsWith(":") || n.equalsIgnoreCase("Content-Length")) {
+                continue;
+            }
+            sb.append(" \\\n  -H '").append(shellQuote(n + ": " + h.value())).append('\'');
+        }
+        String body = req.bodyToString();
+        if (includeBody && body != null && !body.isEmpty()) {
+            sb.append(" \\\n  --data-raw '").append(shellQuote(body)).append('\'');
+        }
+        JsonObject r = new JsonObject();
+        r.addProperty("url", req.url());
+        r.addProperty("method", req.method());
+        r.addProperty("curl", sb.toString());
+        r.addProperty("note", "Copy-paste to reproduce the request in a terminal. Uses -i to show "
+                + "response headers; drop it for body-only.");
+        return r;
+    }
+
+    /** Escape a value for single-quoted shell context: ' -> '\'' . */
+    private static String shellQuote(String s) {
+        return s == null ? "" : s.replace("'", "'\\''");
+    }
+
     // ------------------------------------------------------------------ JavaScript miner
 
     /**
@@ -1605,6 +1943,18 @@ public final class ToolExecutor {
                 JsonObject s = mined.getAsJsonObject("summary");
                 totalSecrets += s.get("secrets").getAsInt();
                 totalEndpoints += s.get("endpoints").getAsInt();
+            }
+            // QoL: register discovered endpoints so they show in the Recon tab and can be probe_paths'd.
+            String origin = originOf(it.url);
+            for (String key : new String[]{"endpoints", "api_calls"}) {
+                if (mined.has(key)) {
+                    for (JsonElement e : mined.getAsJsonArray(key)) {
+                        String abs = toAbsoluteUrl(origin, e.getAsString());
+                        if (abs != null) {
+                            findings.recordEndpoint(null, abs, 0);
+                        }
+                    }
+                }
             }
             // Auto-record High-severity leads (exposed secrets, TLS/CSRF disabled, hard-coded creds).
             for (JsonElement le : mined.getAsJsonArray("vuln_leads")) {
@@ -1921,6 +2271,7 @@ public final class ToolExecutor {
                     urls.add(getStr(args, "url", ""));
                     break;
                 case "fetch_common_paths":
+                case "probe_paths":
                     urls.add(getStr(args, "base_url", ""));
                     break;
                 case "authz_matrix":
@@ -1954,6 +2305,7 @@ public final class ToolExecutor {
             case "start_passive_audit":
             case "fetch_url":
             case "fetch_common_paths":
+            case "probe_paths":
             case "authz_matrix":
             case "test_injection":
             case "discover_params":
@@ -1991,6 +2343,9 @@ public final class ToolExecutor {
             case "fetch_common_paths":
                 return "Probe common recon/misconfig paths (robots.txt, sitemap, .git, .env, "
                         + "actuator, swagger, admin, …) on the target.";
+            case "probe_paths":
+                return "Probe DISCOVERED site/API paths (from recon + mine_javascript) on the target "
+                        + "with safe methods, and classify which are accessible / protected / missing.";
             case "authz_matrix":
                 return "Replay the request as multiple identities (and unauthenticated) to test access "
                         + "control (IDOR/BOLA).";
@@ -2065,6 +2420,11 @@ public final class ToolExecutor {
         }
         if ("fetch_common_paths".equals(tool)) {
             return customPaths(args).length + " path probes against " + getStr(args, "base_url", "");
+        }
+        if ("probe_paths".equals(tool)) {
+            int cap = Math.min(getInt(args, "max", 80), 200);
+            return "up to " + cap + " path probes against " + getStr(args, "base_url", "")
+                    + " (safe methods, in-scope only)";
         }
         if ("race_requests".equals(tool)) {
             return Math.min(getInt(args, "count", 20), 30) + " concurrent requests";
