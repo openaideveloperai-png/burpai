@@ -83,6 +83,11 @@ public enum RiskTier {
         BY_TOOL.put("report_finding", TIER0_AUTO);
         BY_TOOL.put("analyze_client_side", TIER0_AUTO);
         BY_TOOL.put("mine_javascript", TIER0_AUTO);
+        // Read-only analyzers.
+        BY_TOOL.put("analyze_jwt", TIER0_AUTO);
+        BY_TOOL.put("analyze_headers", TIER0_AUTO);
+        BY_TOOL.put("analyze_cookies", TIER0_AUTO);
+        BY_TOOL.put("enumerate_subdomains", TIER0_AUTO);
 
         // Tier 1 — confirm, no new target traffic (staging only).
         BY_TOOL.put("send_to_repeater", TIER1_CONFIRM);
@@ -102,6 +107,10 @@ public enum RiskTier {
         // State-changing API tests — replay unexpected verbs / over-post privileged fields.
         BY_TOOL.put("test_method_tampering", TIER4_AUTHORIZED);
         BY_TOOL.put("test_mass_assignment", TIER4_AUTHORIZED);
+        // High-impact BB tests: hits internal infra (SSRF), auth bypass (JWT), desync (smuggling).
+        BY_TOOL.put("test_ssrf", TIER4_AUTHORIZED);
+        BY_TOOL.put("test_jwt", TIER4_AUTHORIZED);
+        BY_TOOL.put("smuggling_probe", TIER4_AUTHORIZED);
 
         // Tier 2 — confirm + warning, sends traffic to the target.
         BY_TOOL.put("send_http_request", TIER2_CONFIRM_WARN);
@@ -109,12 +118,23 @@ public enum RiskTier {
         BY_TOOL.put("fetch_url", TIER2_CONFIRM_WARN);
         // GraphQL introspection is a single benign read query.
         BY_TOOL.put("graphql_introspect", TIER2_CONFIRM_WARN);
+        // Bug-bounty probes that send a bounded number of non-destructive requests.
+        BY_TOOL.put("test_cors", TIER2_CONFIRM_WARN);
+        BY_TOOL.put("test_host_header", TIER2_CONFIRM_WARN);
+        BY_TOOL.put("test_open_redirect", TIER2_CONFIRM_WARN);
+        BY_TOOL.put("test_prototype_pollution", TIER2_CONFIRM_WARN);
+        BY_TOOL.put("test_hpp", TIER2_CONFIRM_WARN);
+        BY_TOOL.put("check_subdomain_takeover", TIER2_CONFIRM_WARN);
+        BY_TOOL.put("fingerprint_waf", TIER2_CONFIRM_WARN);
 
         // Tier 3 — confirm + strong warning, active / high-volume / stateful.
         BY_TOOL.put("start_active_audit", TIER3_CONFIRM_STRONG);
         BY_TOOL.put("run_request_sequence", TIER3_CONFIRM_STRONG);
         BY_TOOL.put("fetch_common_paths", TIER3_CONFIRM_STRONG);
         BY_TOOL.put("probe_paths", TIER3_CONFIRM_STRONG);
+        // High-volume header fuzzing / cache probing.
+        BY_TOOL.put("test_cache_poisoning", TIER3_CONFIRM_STRONG);
+        BY_TOOL.put("discover_headers", TIER3_CONFIRM_STRONG);
     }
 
     /** Unknown tools default to the strongest gate: fail safe, never fail open. */

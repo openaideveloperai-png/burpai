@@ -7,6 +7,7 @@ import burp.api.montoya.proxy.http.InterceptedResponse;
 import burp.api.montoya.proxy.http.ProxyResponseHandler;
 import burp.api.montoya.proxy.http.ProxyResponseReceivedAction;
 import burp.api.montoya.proxy.http.ProxyResponseToBeSentAction;
+import com.example.burpgemini.hunt.BbData;
 import com.example.burpgemini.util.BurpContext;
 
 import java.util.List;
@@ -134,6 +135,10 @@ public final class PassiveScanner implements ProxyResponseHandler {
             checkSourceMap(body, response, url);
             checkGraphql(body, req, url);
             checkEntropySecrets(body, url);
+            checkTakeover(body, url);
+            checkMixedContent(body, response, url, secure);
+            checkCacheableSensitive(body, response, url);
+            checkApiDocs(body, response, url);
         }
 
         // Optional AI enrichment: only on newly-seen endpoints, and only when enabled.
@@ -398,6 +403,69 @@ public final class PassiveScanner implements ProxyResponseHandler {
                         + ") — test for open redirect / SSRF.");
                 flagged++;
             }
+        }
+    }
+
+    /** Subdomain-takeover: an orphan-provider fingerprint in the body. */
+    private void checkTakeover(String body, String url) {
+        String scan = body.length() > 20_000 ? body.substring(0, 20_000) : body;
+        for (String[] fp : BbData.TAKEOVER_FINGERPRINTS) {
+            if (scan.contains(fp[0])) {
+                add("Subdomain takeover candidate (" + fp[1] + ")", "High", "Tentative", url,
+                        "Orphan fingerprint \"" + fp[0] + "\" — confirm dangling DNS (dig CNAME).");
+                break;
+            }
+        }
+    }
+
+    /** Mixed content: an HTTPS page loading http:// scripts/resources. */
+    private void checkMixedContent(String body, InterceptedResponse r, String url, boolean secure) {
+        if (!secure) {
+            return;
+        }
+        String ct = header(r, "Content-Type");
+        if (ct == null || !ct.toLowerCase().contains("html")) {
+            return;
+        }
+        String scan = body.length() > MAX_BODY_SCAN ? body.substring(0, MAX_BODY_SCAN) : body;
+        if (scan.contains("src=\"http://") || scan.contains("src='http://")
+                || scan.contains("href=\"http://") && scan.contains("stylesheet")) {
+            add("Mixed content on HTTPS page", "Low", "Firm", url,
+                    "HTTPS page references http:// resources — MITM/injection risk.");
+        }
+    }
+
+    /** A cacheable response that also carries sensitive/authenticated data. */
+    private void checkCacheableSensitive(String body, InterceptedResponse r, String url) {
+        String cc = header(r, "Cache-Control");
+        String lc = cc == null ? "" : cc.toLowerCase();
+        boolean cacheable = (lc.contains("public") || lc.contains("max-age") || lc.contains("s-maxage"))
+                && !lc.contains("no-store") && !lc.contains("private") && !lc.contains("no-cache");
+        boolean cachedHit = header(r, "Age") != null || header(r, "X-Cache") != null
+                || header(r, "CF-Cache-Status") != null;
+        if (!cacheable && !cachedHit) {
+            return;
+        }
+        String bl = body.length() > 40_000 ? body.substring(0, 40_000).toLowerCase() : body.toLowerCase();
+        boolean sensitive = bl.contains("\"email\"") || bl.contains("\"token\"") || bl.contains("\"api_key\"")
+                || bl.contains("authorization") || bl.contains("set-cookie") || bl.contains("\"ssn\"")
+                || bl.contains("\"password\"");
+        boolean personalized = header(r, "Set-Cookie") != null;
+        if (sensitive || personalized) {
+            add("Cacheable sensitive response", "Medium", "Tentative", url,
+                    "Response is cacheable (" + (cc == null ? "cache hit indicators" : cc)
+                    + ") yet appears to carry user/sensitive data — cache-deception / data-leak risk.");
+        }
+    }
+
+    /** Exposed API documentation (Swagger/OpenAPI) — a full map of the API surface. */
+    private void checkApiDocs(String body, InterceptedResponse r, String url) {
+        String head = body.length() > 4000 ? body.substring(0, 4000) : body;
+        if (head.contains("\"swagger\":\"2.0\"") || head.contains("\"openapi\":\"3")
+                || head.contains("\"openapi\": \"3") || head.contains("swagger-ui")
+                || head.contains("SwaggerUIBundle")) {
+            add("Exposed API documentation (Swagger/OpenAPI)", "Low", "Firm", url,
+                    "OpenAPI/Swagger spec or UI is reachable — enumerates every endpoint & parameter.");
         }
     }
 

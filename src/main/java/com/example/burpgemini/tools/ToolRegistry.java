@@ -386,10 +386,168 @@ public final class ToolRegistry {
                         p("modifications", mutationArray())
                 ), req())));
 
+        // ---- bug-bounty toolkit --------------------------------------------
+
+        d.add(new ToolSpec("analyze_jwt",
+                "Decode a JWT and analyze it for weaknesses (alg=none, HMAC brute-forcability, kid/jku "
+                        + "injection, missing/expired exp, tamperable role/scope claims). Read-only, no "
+                        + "crypto/verification.",
+                obj(props(
+                        p("token", strType("The JWT string. Omit to pull one from a source+id request.")),
+                        p("source", enumType("Where the id comes from.", "proxy", "sitemap", "selection")),
+                        p("id", strType("Item id whose request carries a Bearer/cookie JWT."))
+                ), req())));
+
+        d.add(new ToolSpec("analyze_headers",
+                "Audit a captured response's security headers (CSP, HSTS, X-Frame-Options, "
+                        + "Referrer-Policy, Permissions-Policy, COOP/COEP/CORP, nosniff) and info-disclosure "
+                        + "headers; returns a hardening score. Read-only.",
+                obj(props(
+                        p("source", enumType("Where the id comes from.", "proxy", "sitemap", "selection")),
+                        p("id", strType("Item id whose response to audit."))
+                ), req("source", "id"))));
+
+        d.add(new ToolSpec("analyze_cookies",
+                "Audit Set-Cookie flags on a captured response (HttpOnly, Secure, SameSite, __Host-/"
+                        + "__Secure- prefixes, JWT-in-cookie). Read-only.",
+                obj(props(
+                        p("source", enumType("Where the id comes from.", "proxy", "sitemap", "selection")),
+                        p("id", strType("Item id whose response to audit."))
+                ), req("source", "id"))));
+
+        d.add(new ToolSpec("enumerate_subdomains",
+                "List hosts/subdomains seen across captured traffic and the site map, grouped by the "
+                        + "target apex, with in-scope flags. Read-only (recon aid).",
+                obj(props(
+                        p("base_url", strType("A target URL to derive the apex from, e.g. https://app.example.com")),
+                        p("apex", strType("Explicit apex domain, e.g. example.com (overrides base_url)."))
+                ), req())));
+
+        d.add(new ToolSpec("check_subdomain_takeover",
+                "Fetch a host and match its response against known subdomain-takeover fingerprints "
+                        + "(S3/GitHub Pages/Heroku/Fastly/Shopify/…). Sends one request — requires "
+                        + "confirmation. Flags a candidate; confirm dangling DNS by hand.",
+                obj(props(
+                        p("url", strType("URL to check, e.g. https://sub.example.com/"))
+                ), req("url"))));
+
+        d.add(new ToolSpec("test_cors",
+                "Probe CORS: send several Origin variants (arbitrary, null, scheme-downgrade, "
+                        + "subdomain/suffix/prefix bypasses) and report reflected/exploitable "
+                        + "Access-Control headers. Requires confirmation.",
+                obj(baseReqProps(), req())));
+
+        d.add(new ToolSpec("test_host_header",
+                "Inject an attacker host via Host / X-Forwarded-Host / X-Host / Forwarded and detect "
+                        + "reflection in the body or Location (password-reset poisoning, routing SSRF, "
+                        + "cache poisoning). Requires confirmation.",
+                obj(baseReqProps(), req())));
+
+        d.add(new ToolSpec("test_open_redirect",
+                "Inject open-redirect payloads (//evil, https:/evil, @evil, target.evil, encoded "
+                        + "slashes, unicode) into redirect-like params and detect an off-site 3xx or "
+                        + "client-side redirect. Requires confirmation.",
+                obj(props(
+                        p("base_id", strType("Base item id.")),
+                        p("base_source", enumType("Where base_id comes from.", "proxy", "sitemap", "selection")),
+                        p("raw_request", strType("Optional raw request instead of a base id.")),
+                        p("modifications", mutationArray()),
+                        p("param_name", strType("Force a specific parameter to test (else auto-detected)."))
+                ), req())));
+
+        d.add(new ToolSpec("test_prototype_pollution",
+                "Send __proto__ / constructor.prototype pollution payloads (URL params + JSON body) and "
+                        + "watch for a reflected marker, errors or behavior change (server-side PP signal). "
+                        + "Requires confirmation.",
+                obj(baseReqProps(), req())));
+
+        d.add(new ToolSpec("test_hpp",
+                "HTTP parameter pollution: send a duplicated parameter (name=a&name=b) and report which "
+                        + "value the server honors (first/last/both) — a WAF/access-control bypass "
+                        + "primitive. Requires confirmation.",
+                obj(props(
+                        p("base_id", strType("Base item id.")),
+                        p("base_source", enumType("Where base_id comes from.", "proxy", "sitemap", "selection")),
+                        p("raw_request", strType("Optional raw request instead of a base id.")),
+                        p("modifications", mutationArray()),
+                        p("param_name", strType("Parameter to duplicate (else the first URL param)."))
+                ), req())));
+
+        d.add(new ToolSpec("fingerprint_waf",
+                "Send a benign-but-attacky payload and fingerprint any WAF/CDN in front of the target "
+                        + "(Cloudflare/Akamai/Imperva/ModSecurity/F5/AWS WAF/…) and whether it blocks. "
+                        + "Requires confirmation.",
+                obj(props(
+                        p("base_id", strType("Base item id.")),
+                        p("base_source", enumType("Where base_id comes from.", "proxy", "sitemap", "selection")),
+                        p("raw_request", strType("Optional raw request instead of a base id.")),
+                        p("url", strType("Or a URL to probe.")),
+                        p("modifications", mutationArray())
+                ), req())));
+
+        d.add(new ToolSpec("test_cache_poisoning",
+                "Web cache poisoning probe: add a cache-buster, inject commonly-unkeyed headers "
+                        + "(X-Forwarded-Host/Scheme/…) and report which reflect into a cacheable response. "
+                        + "Sends several requests — requires strong confirmation. Verify a second request "
+                        + "gets the poisoned response before reporting.",
+                obj(baseReqProps(), req())));
+
+        d.add(new ToolSpec("discover_headers",
+                "Param-Miner-style: brute-force hidden/unkeyed request headers and report which are "
+                        + "reflected or change the response (cache poisoning, IP-allowlist / access-control "
+                        + "bypass). Sends many requests — requires strong confirmation.",
+                obj(props(
+                        p("base_id", strType("Base item id.")),
+                        p("base_source", enumType("Where base_id comes from.", "proxy", "sitemap", "selection")),
+                        p("raw_request", strType("Optional raw request instead of a base id.")),
+                        p("modifications", mutationArray()),
+                        p("wordlist", arrayOf(strType("A header name."), "Optional custom header wordlist."))
+                ), req())));
+
+        d.add(new ToolSpec("test_ssrf",
+                "ACTIVE, authorized-only. Inject a Burp Collaborator (OAST) domain into URL-ish params "
+                        + "and SSRF headers (Referer/X-Forwarded-For/…), then poll_oast_interactions to "
+                        + "confirm blind SSRF. Can reach internal infra — authorized-only.",
+                obj(props(
+                        p("base_id", strType("Base item id.")),
+                        p("base_source", enumType("Where base_id comes from.", "proxy", "sitemap", "selection")),
+                        p("raw_request", strType("Optional raw request instead of a base id.")),
+                        p("modifications", mutationArray()),
+                        p("oast_domain", strType("Optional OAST domain (else one is minted).")),
+                        p("label", strType("Correlation label for poll_oast_interactions (default 'ssrf')."))
+                ), req())));
+
+        d.add(new ToolSpec("test_jwt",
+                "ACTIVE, authorized-only. Resend the request with an alg=none and a signature-stripped "
+                        + "JWT and compare to the authenticated baseline to detect signature-bypass auth "
+                        + "flaws. Authorized-only (auth bypass).",
+                obj(props(
+                        p("base_id", strType("Base item id (a request carrying a JWT).")),
+                        p("base_source", enumType("Where base_id comes from.", "proxy", "sitemap", "selection")),
+                        p("raw_request", strType("Optional raw request instead of a base id.")),
+                        p("modifications", mutationArray()),
+                        p("token", strType("Optional explicit JWT (else extracted from the request)."))
+                ), req())));
+
+        d.add(new ToolSpec("smuggling_probe",
+                "ACTIVE, authorized-only. Conservative HTTP request-smuggling HINT: sends only "
+                        + "well-formed Transfer-Encoding variants and compares status/timing (no hanging "
+                        + "payloads). Confirm any desync with Burp's HTTP Request Smuggler. Authorized-only.",
+                obj(baseReqProps(), req())));
+
         return d;
     }
 
     // ---- shared sub-schemas ------------------------------------------------
+
+    /** The common {base_id, base_source, raw_request, modifications} request-spec properties. */
+    private static JsonObject baseReqProps() {
+        return props(
+                p("base_id", strType("Base item id.")),
+                p("base_source", enumType("Where base_id comes from.", "proxy", "sitemap", "selection")),
+                p("raw_request", strType("Optional raw request instead of a base id.")),
+                p("modifications", mutationArray()));
+    }
 
     private static JsonObject mutationArray() {
         return arrayOf(mutationSchema(),

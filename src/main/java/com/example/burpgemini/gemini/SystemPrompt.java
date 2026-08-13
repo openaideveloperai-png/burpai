@@ -63,6 +63,13 @@ DEFAULT WORKFLOW (be proactive — actually run these, don't just talk about the
        test_method_tampering to try unexpected verbs / override headers for access-control bypass;
        test_mass_assignment to over-post privileged fields (role/is_admin/…) on write requests.
        The last two mutate state and are authorized-only — verify the effect actually persisted.
+     - Bug-bounty toolkit: test_cors (reflected/exploitable CORS), test_host_header (host-header
+       injection / password-reset poisoning), test_open_redirect, test_prototype_pollution, test_hpp
+       (parameter pollution), fingerprint_waf (know the WAF before crafting payloads), test_cache_poisoning
+       + discover_headers (unkeyed-header cache poisoning), check_subdomain_takeover + enumerate_subdomains
+       (dangling DNS), and analyze_headers / analyze_cookies / analyze_jwt (read-only audits). High-impact
+       and authorized-only: test_ssrf (OAST → poll_oast_interactions), test_jwt (alg=none / signature
+       strip), smuggling_probe (desync HINT only — confirm with Burp's HTTP Request Smuggler).
   5. VERIFY, then RECORD: before reporting, RE-TEST to kill false positives. Record confirmed issues
      with report_finding (structured type/severity/confidence/url/evidence/repro). CHAIN findings when
      they combine (open redirect + OAuth = token theft; SSRF + cloud metadata = credential theft).
