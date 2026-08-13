@@ -229,6 +229,23 @@ public final class ToolRegistry {
                         p("id", strType("Item id whose response body to analyze."))
                 ), req("source", "id"))));
 
+        d.add(new ToolSpec("mine_javascript",
+                "Deep-mine captured JavaScript (no new traffic) for secrets (AWS/GCP/Google/Slack/"
+                        + "Stripe/GitHub/GitLab/Twilio/SendGrid/JWT/private keys), API endpoints & "
+                        + "fetch/axios call targets, debug/feature flags, DOM-XSS sinks, insecure "
+                        + "patterns (disabled TLS/CSRF, weak randomness, hard-coded creds), internal/"
+                        + "staging hosts, cloud buckets, GraphQL ops and risky comments — returning a "
+                        + "prioritized list of vuln leads to test. Read-only. With no id it sweeps all "
+                        + "JS in the proxy history.",
+                obj(props(
+                        p("source", enumType("Where the id comes from (for a single file).",
+                                "proxy", "sitemap", "selection")),
+                        p("id", strType("Optional: mine one captured JS item by id. Omit to sweep all JS "
+                                + "in the proxy history.")),
+                        p("host_contains", strType("When sweeping, only JS whose URL contains this substring.")),
+                        p("max_files", intType("Max JS files to mine when sweeping (default 15, max 40)."))
+                ), req())));
+
         d.add(new ToolSpec("report_finding",
                 "Record a structured, verified finding (adds it to the AI Recon findings, deduped). "
                         + "Read-only.",

@@ -25,6 +25,7 @@ import com.example.burpgemini.recon.InfoStore;
 import com.example.burpgemini.recon.PassiveFinding;
 import com.example.burpgemini.util.BurpContext;
 import com.example.burpgemini.util.ContentExtractor;
+import com.example.burpgemini.util.JsMiner;
 import com.example.burpgemini.util.ResponseDiff;
 import com.example.burpgemini.util.TextDiff;
 import com.google.gson.JsonArray;
@@ -104,6 +105,8 @@ public final class ToolExecutor {
                     return extractFromCaptured(args);
                 case "analyze_client_side":
                     return analyzeClientSide(args);
+                case "mine_javascript":
+                    return mineJavascript(args);
                 case "fetch_url":
                     return fetchUrl(args);
                 case "fetch_common_paths":
@@ -1529,6 +1532,127 @@ public final class ToolExecutor {
 
     private static String headerValue(HttpRequest req, String name) {
         return req.hasHeader(name) ? req.headerValue(name) : null;
+    }
+
+    // ------------------------------------------------------------------ JavaScript miner
+
+    /**
+     * Deep-mine JavaScript already captured in Burp. With a source+id it mines that one item;
+     * otherwise it sweeps every JavaScript response in the Proxy history (optionally filtered by
+     * host). Read-only: it sends no traffic. High-value secrets are auto-recorded as findings; the
+     * result hands the agent a prioritized list of vuln leads (endpoints, sinks, insecure patterns)
+     * to test with the active tools.
+     */
+    private JsonObject mineJavascript(JsonObject args) {
+        String source = getStr(args, "source", null);
+        String id = getStr(args, "id", null);
+        String hostContains = getStr(args, "host_contains", null);
+        int maxFiles = Math.min(getInt(args, "max_files", 15), 40);
+
+        List<Item> targets = new ArrayList<>();
+        if (id != null) {
+            Item it = resolve(source == null ? "proxy" : source, id);
+            if (it == null) {
+                return error("No captured item for that source/id.");
+            }
+            targets.add(it);
+        } else {
+            // Sweep the proxy history for JavaScript responses.
+            for (ProxyHttpRequestResponse h : api.proxy().history()) {
+                if (targets.size() >= maxFiles) {
+                    break;
+                }
+                if (h.request() == null || h.response() == null) {
+                    continue;
+                }
+                String url = safeUrl(h);
+                if (hostContains != null && !url.toLowerCase().contains(hostContains.toLowerCase())) {
+                    continue;
+                }
+                if (!looksLikeJs(url, h.response())) {
+                    continue;
+                }
+                targets.add(item(h.request(), h.response(), url));
+            }
+        }
+        if (targets.isEmpty()) {
+            return error("No JavaScript found to mine. Browse the target so JS loads through the proxy, "
+                    + "or fetch a specific .js with fetch_url first, then mine it by id.");
+        }
+
+        JsonArray files = new JsonArray();
+        JsonArray allLeads = new JsonArray();
+        int totalSecrets = 0;
+        int totalEndpoints = 0;
+        int recorded = 0;
+        for (Item it : targets) {
+            String body = it.response != null ? it.response.bodyToString() : "";
+            JsonObject mined = JsMiner.mine(body, it.url);
+
+            JsonObject fileSummary = new JsonObject();
+            fileSummary.addProperty("url", it.url);
+            fileSummary.add("summary", mined.getAsJsonObject("summary"));
+            // Keep the per-file payload compact; the full detail lives under the richest categories.
+            for (String k : new String[]{"secrets", "vuln_leads", "endpoints", "api_calls",
+                    "debug_feature_flags", "insecure_patterns", "interesting_comments"}) {
+                if (mined.has(k) && mined.get(k).isJsonArray() && mined.getAsJsonArray(k).size() > 0) {
+                    fileSummary.add(k, mined.get(k));
+                }
+            }
+            files.add(fileSummary);
+
+            if (mined.has("summary")) {
+                JsonObject s = mined.getAsJsonObject("summary");
+                totalSecrets += s.get("secrets").getAsInt();
+                totalEndpoints += s.get("endpoints").getAsInt();
+            }
+            // Auto-record High-severity leads (exposed secrets, TLS/CSRF disabled, hard-coded creds).
+            for (JsonElement le : mined.getAsJsonArray("vuln_leads")) {
+                JsonObject lead = le.getAsJsonObject();
+                allLeads.add(lead);
+                if ("High".equals(lead.get("severity").getAsString())) {
+                    boolean isNew = findings.addFinding(new PassiveFinding(
+                            "JS: " + lead.get("type").getAsString(), "High", "Tentative", it.url,
+                            lead.get("evidence").getAsString(), true));
+                    if (isNew) {
+                        recorded++;
+                    }
+                }
+            }
+        }
+
+        JsonObject r = new JsonObject();
+        r.addProperty("files_mined", targets.size());
+        r.addProperty("total_secrets", totalSecrets);
+        r.addProperty("total_endpoints", totalEndpoints);
+        r.addProperty("high_severity_recorded", recorded);
+        r.add("files", files);
+        r.addProperty("note", "Static JS analysis. Verify each secret is live before reporting; feed the "
+                + "discovered endpoints/api_calls into the active tools (auth/IDOR via authz_matrix, "
+                + "injection via test_injection); if a source map is referenced, fetch it to recover "
+                + "original source. High-severity leads were added to the AI Recon findings.");
+        return r;
+    }
+
+    /** Heuristic: is this captured item JavaScript worth mining? */
+    private static boolean looksLikeJs(String url, HttpResponse resp) {
+        String lc = url == null ? "" : url.toLowerCase();
+        int q = lc.indexOf('?');
+        String path = q > 0 ? lc.substring(0, q) : lc;
+        if (path.endsWith(".js") || path.endsWith(".mjs") || path.endsWith(".jsx")
+                || path.endsWith(".ts") || path.endsWith(".map")) {
+            return true;
+        }
+        if (resp == null) {
+            return false;
+        }
+        String ct = resp.headerValue("Content-Type");
+        if (ct == null) {
+            String mime = resp.mimeType() == null ? "" : resp.mimeType().toString().toLowerCase();
+            return mime.contains("script");
+        }
+        String c = ct.toLowerCase();
+        return c.contains("javascript") || c.contains("ecmascript");
     }
 
     // ------------------------------------------------------------------ client-side analysis & findings

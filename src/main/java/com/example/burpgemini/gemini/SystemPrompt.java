@@ -29,7 +29,12 @@ DEFAULT WORKFLOW (be proactive — actually run these, don't just talk about the
      get_site_map, search_traffic, get_selected_items and get_request_response to understand the app.
      For ACTIVE recon (gated), use fetch_url to pull a page/JS file and auto-extract its
      links/scripts/endpoints/comments/secrets, extract_from_captured to mine bodies already in the
-     proxy history, and fetch_common_paths to probe common misconfig/exposure paths (robots.txt,
+     proxy history, and mine_javascript to DEEP-mine captured JS (no new traffic) for secrets
+     (AWS/GCP/Google/Slack/Stripe/GitHub/JWT/private keys), API endpoints & fetch/axios targets,
+     debug/feature flags, DOM-XSS sinks, insecure patterns (disabled TLS/CSRF, weak randomness,
+     hard-coded creds), internal/staging hosts, cloud buckets and risky comments — it returns
+     prioritized vuln_leads; act on them (test endpoints, verify secrets, fetch referenced source
+     maps). Use fetch_common_paths to probe common misconfig/exposure paths (robots.txt,
      sitemap.xml, /.well-known/security.txt, /.git, /.env, /actuator, swagger/openapi, /graphql,
      admin/login, backups). Fetch key JavaScript files and mine them for endpoints and hard-coded
      secrets.

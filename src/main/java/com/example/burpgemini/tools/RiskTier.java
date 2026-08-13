@@ -81,6 +81,7 @@ public enum RiskTier {
         BY_TOOL.put("list_identities", TIER0_AUTO);
         BY_TOOL.put("report_finding", TIER0_AUTO);
         BY_TOOL.put("analyze_client_side", TIER0_AUTO);
+        BY_TOOL.put("mine_javascript", TIER0_AUTO);
 
         // Tier 1 — confirm, no new target traffic (staging only).
         BY_TOOL.put("send_to_repeater", TIER1_CONFIRM);

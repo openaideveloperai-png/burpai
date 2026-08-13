@@ -57,6 +57,16 @@ Both providers are called directly with **your own key/token** — it does **not
   blind OOB); a **response‑diffing engine** (`compare_responses`, normalizes CSRF/timestamps/ids);
   **`discover_params`**, **`race_requests`**, **`analyze_client_side`** (DOM‑XSS sinks / CSP), and
   structured **`report_finding`** with a verify‑before‑report loop.
+- **JavaScript miner (`mine_javascript`)** — deep static analysis of captured JS (no new traffic).
+  With no id it sweeps **every** JS file in the proxy history; with a source+id it mines one. Pulls
+  **secrets** (AWS/GCP/Google/Slack/Stripe/GitHub/GitLab/Twilio/SendGrid/npm tokens, JWTs, private
+  keys, basic‑auth URLs, plus entropy‑checked generic assignments), **API endpoints** and
+  `fetch`/`axios`/XHR call targets, **debug/feature flags** (`debug`, `__DEV__`, `bypassAuth`,
+  staging/mock switches), **DOM‑XSS sinks**, **insecure patterns** (disabled TLS/CSRF, `Math.random`
+  tokens, hard‑coded creds, prototype pollution, wildcard CORS in code), **internal/staging hosts**,
+  **cloud buckets**, **GraphQL operations** and **risky comments** (TODO/FIXME/HACK/password/…). It
+  returns a **prioritized `vuln_leads`** list for the AI to act on and auto‑records High‑severity
+  leads into the findings. Read‑only (Tier 0). Secret values are masked.
 - **API‑specific testing** — **`graphql_introspect`** (detects exposed GraphQL schemas),
   **`test_method_tampering`** (unexpected HTTP verbs + `X‑HTTP‑Method‑Override` headers for
   access‑control/verb bypass), and **`test_mass_assignment`** (over‑posts privileged fields like
@@ -249,7 +259,7 @@ and `get_passive_findings`, prioritise everything, and suggest next steps. Toggl
 | `list_proxy_history`, `get_request_response`, `get_site_map`, `get_selected_items`, `search_traffic`, `get_scope`, `get_passive_findings`, `get_recon_data`, `extract_from_captured`, `decode_transform` | **0 — auto** | Read‑only / local. No dialog. `get_recon_data` returns the gathered parameter/secret/header/cookie/tech inventory; `extract_from_captured` mines an already‑captured response for links/JS/endpoints/secrets. |
 | `send_to_repeater`, `add_to_scope`, `remove_from_scope`, `send_to_intruder` | **1 — confirm** | Stage in a Burp tool / edit scope. No new target traffic. Intruder is staged (Burp's API can't auto‑start an attack); set payloads and start it manually. |
 | `send_http_request`, `start_passive_audit`, `fetch_url`, `graphql_introspect` | **2 — confirm + warning** | Sends one request / runs passive checks. `fetch_url` fetches a URL and auto‑extracts links/JS/endpoints/secrets; `graphql_introspect` sends one introspection query. |
-| `create_oast_payload`, `poll_oast_interactions`, `compare_responses`, `analyze_client_side`, `report_finding`, `list_identities` | **0 — auto** | OAST minting/polling, response diffing, client‑side analysis, structured findings — no target traffic. |
+| `create_oast_payload`, `poll_oast_interactions`, `compare_responses`, `analyze_client_side`, `mine_javascript`, `report_finding`, `list_identities` | **0 — auto** | OAST minting/polling, response diffing, client‑side analysis, deep JS mining (secrets/endpoints/flags/sinks/leads), structured findings — no target traffic. |
 | `set_identity` | **1 — confirm** | Stores an auth context (credentials) for the access‑control matrix. |
 | `start_active_audit`, `run_request_sequence`, `fetch_common_paths` | **3 — confirm + strong warning** | Active scan / a series of requests / probing many recon paths. Card shows the count and a sample; **always** confirmed. |
 | `test_injection`, `authz_matrix`, `discover_params`, `race_requests`, `test_method_tampering`, `test_mass_assignment` | **4 — active exploit, authorized‑only** | Oracle injection, access‑control matrix, param brute‑force, concurrency races, HTTP verb/method‑override tampering, and mass‑assignment over‑posting. **Always** requires an explicit "authorized" confirmation and is **never** auto‑approved — not even in Agent mode. |
