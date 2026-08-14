@@ -105,7 +105,8 @@ Both providers are called directly with **your own key/token** — it does **not
   one exception — they always stop for an explicit "I'm authorized" confirmation, even in Agent
   mode.**
 - **Background passive recon ("AI Recon" tab)** — a read‑only passive scanner mines **every**
-  in‑scope proxied request/response. It **gathers information** (parameter inventory with sample
+  proxied request/response (by default **all** domains you browse through Burp, in scope or not —
+  toggle "Log EVERYTHING" in Config to restrict to in‑scope). It **gathers information** (parameter inventory with sample
   values, discovered secrets/tokens (masked), request/response headers, cookies, technologies, hosts,
   emails) that keeps accumulating across repeat requests, **plus** deduplicated security findings
   (missing headers, insecure cookies, CORS misconfig, JWT/secret exposure, verbose errors, reflected
@@ -231,7 +232,7 @@ reach those through Gemini (Option A) or an OpenAI‑compatible gateway like Ope
 | Puter web search | **ON** | Adds Puter's built‑in `web_search` tool for OpenAI models. |
 | ⚡ Agent mode (auto‑approve) | **OFF** | Auto‑approves **every** action with no dialog, so the assistant runs end‑to‑end on its own. Scope still applies (out‑of‑scope stays blocked unless you also enable the override). A loud red banner shows while it's on. |
 | Background passive scan | **ON** | Local heuristic checks on proxied responses → the AI Recon tab + `get_passive_findings`. |
-| Passive scan in‑scope only | **ON** | Restrict passive scanning to in‑scope traffic. |
+| 🌐 Log EVERYTHING (incl. out‑of‑scope) | **ON** | Records **all** proxied traffic — every domain you browse through Burp, in scope or not (subdomains, third‑party hosts, CDNs). Uncheck to restrict passive recon to Burp's in‑scope traffic only. |
 | AI‑enrich new endpoints | **OFF** | Optional throttled AI pass over newly‑seen endpoints (uses tokens). |
 | Require confirmation before active actions | **ON** | Governs Tier 1–2. Tier 3 always confirms regardless. |
 | Respect Burp scope | **ON** | Blocks out‑of‑scope target traffic. |

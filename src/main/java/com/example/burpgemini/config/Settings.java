@@ -23,6 +23,9 @@ public final class Settings {
     private static final String K_AUTO_APPROVE = "burpgemini.autoApprove";
     private static final String K_PASSIVE_SCAN = "burpgemini.passiveScan";
     private static final String K_PASSIVE_IN_SCOPE = "burpgemini.passiveInScopeOnly";
+    // v2 control: log ALL proxied traffic (incl. out-of-scope). Supersedes the in-scope-only key so a
+    // stale saved value can't keep recon restricted. Default ON = log everything.
+    private static final String K_PASSIVE_LOG_ALL = "burpgemini.passiveLogAll";
     private static final String K_AI_ENRICH = "burpgemini.aiEnrich";
     private static final String K_PROVIDER = "burpgemini.provider";
     private static final String K_PUTER_TOKEN = "burpgemini.puterToken";
@@ -354,13 +357,26 @@ public final class Settings {
         prefs.setBoolean(K_PASSIVE_SCAN, v);
     }
 
-    /** Only passively scan in-scope traffic. Default ON. */
+    /** Only passively scan in-scope traffic. (Legacy key; superseded by {@link #isPassiveLogAll()}.) */
     public boolean isPassiveInScopeOnly() {
         return boolOrDefault(K_PASSIVE_IN_SCOPE, true);
     }
 
     public void setPassiveInScopeOnly(boolean v) {
         prefs.setBoolean(K_PASSIVE_IN_SCOPE, v);
+    }
+
+    /**
+     * Log EVERY proxied response — including out-of-scope domains. Default ON so recon captures the
+     * whole browsing surface (subdomains, third-party hosts, CDNs) the way a bug-bounty hunter wants.
+     * Turn OFF to restrict passive recon to Burp's in-scope traffic only.
+     */
+    public boolean isPassiveLogAll() {
+        return boolOrDefault(K_PASSIVE_LOG_ALL, true);
+    }
+
+    public void setPassiveLogAll(boolean v) {
+        prefs.setBoolean(K_PASSIVE_LOG_ALL, v);
     }
 
     /** Enrich newly-seen endpoints with an AI pass (uses tokens). Default OFF. */

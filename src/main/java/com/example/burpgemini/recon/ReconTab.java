@@ -232,7 +232,8 @@ public final class ReconTab extends JPanel {
                 + "   ·   Findings: " + store.findingCount()
                 + "   ·   Params: " + info.paramCount()
                 + "   ·   Secrets: " + info.secretCount()
-                + "   (passive, read-only — records in-scope proxy traffic)");
+                + "   (passive, read-only — logs ALL proxied traffic by default; "
+                + "restrict to in-scope in Config)");
     }
 
     private String buildInfoText() {

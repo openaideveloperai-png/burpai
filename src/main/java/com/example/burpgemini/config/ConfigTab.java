@@ -79,7 +79,9 @@ public final class ConfigTab extends JPanel {
 
     // Background passive recon
     private final JCheckBox passiveScan = new JCheckBox("Background passive scan (local heuristics on proxied responses)");
-    private final JCheckBox passiveInScope = new JCheckBox("Passive scan in-scope traffic only");
+    private final JCheckBox passiveLogAll = new JCheckBox(
+            "🌐 Log EVERYTHING — record ALL proxied traffic, including out-of-scope domains "
+            + "(uncheck to restrict recon to Burp's in-scope traffic)");
     private final JCheckBox aiEnrich = new JCheckBox("AI-enrich new endpoints (uses tokens; throttled, opt-in)");
     private final JLabel statusLabel = new JLabel(" ");
 
@@ -324,14 +326,14 @@ public final class ConfigTab extends JPanel {
 
         // ---- Background passive recon ----
         passiveScan.setAlignmentX(Component.LEFT_ALIGNMENT);
-        passiveInScope.setAlignmentX(Component.LEFT_ALIGNMENT);
+        passiveLogAll.setAlignmentX(Component.LEFT_ALIGNMENT);
         aiEnrich.setAlignmentX(Component.LEFT_ALIGNMENT);
         c.gridy = row++;
         form.add(sectionLabel("Background passive recon"), c);
         c.gridy = row++;
         form.add(passiveScan, c);
         c.gridy = row++;
-        form.add(passiveInScope, c);
+        form.add(passiveLogAll, c);
         c.gridy = row++;
         form.add(aiEnrich, c);
 
@@ -521,7 +523,7 @@ public final class ConfigTab extends JPanel {
         allowOutOfScope.setSelected(settings.isAllowOutOfScope());
         persistTranscripts.setSelected(settings.isPersistTranscripts());
         passiveScan.setSelected(settings.isPassiveScanEnabled());
-        passiveInScope.setSelected(settings.isPassiveInScopeOnly());
+        passiveLogAll.setSelected(settings.isPassiveLogAll());
         aiEnrich.setSelected(settings.isAiEnrichEnabled());
     }
 
@@ -578,13 +580,14 @@ public final class ConfigTab extends JPanel {
         settings.setAllowOutOfScope(allowOutOfScope.isSelected());
         settings.setPersistTranscripts(persistTranscripts.isSelected());
         settings.setPassiveScanEnabled(passiveScan.isSelected());
-        settings.setPassiveInScopeOnly(passiveInScope.isSelected());
+        settings.setPassiveLogAll(passiveLogAll.isSelected());
         settings.setAiEnrichEnabled(aiEnrich.isSelected());
         ctx.logInfo("Settings saved (provider=" + settings.getProvider()
                 + ", geminiModel=" + settings.getModel()
                 + ", puterModel=" + settings.getPuterModel()
                 + ", requireConfirm=" + settings.isRequireConfirmActive()
                 + ", respectScope=" + settings.isRespectScope()
+                + ", passiveLogAll=" + settings.isPassiveLogAll()
                 + ", allowOOS=" + settings.isAllowOutOfScope() + ")");
     }
 

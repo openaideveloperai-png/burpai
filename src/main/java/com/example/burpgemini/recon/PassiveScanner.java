@@ -111,7 +111,9 @@ public final class PassiveScanner implements ProxyResponseHandler {
             return;
         }
         String url = req.url();
-        if (ctx.settings().isPassiveInScopeOnly() && !inScope(url)) {
+        // Log everything by default (incl. out-of-scope). Only skip out-of-scope when the operator
+        // has explicitly turned "log all" OFF (i.e. restricted recon to Burp's in-scope traffic).
+        if (!ctx.settings().isPassiveLogAll() && !inScope(url)) {
             return;
         }
 
